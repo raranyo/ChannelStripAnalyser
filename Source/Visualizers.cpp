@@ -62,12 +62,15 @@ SpectrumAnalyser::~SpectrumAnalyser()
 }
 void SpectrumAnalyser::paint (Graphics& g)
 {
-    std::lock_guard<std::mutex> lock (m);
+//    std::lock_guard<std::mutex> lock (m);
+    createFrame();
     g.drawImage (spectrumFrame, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
 }
 void SpectrumAnalyser::createFrame()
 {
-    std::lock_guard<std::mutex> lock (m);
+    std::unique_lock<std::mutex> lock (m, std::try_to_lock);
+    if(!lock.owns_lock())
+        return;
 
     spectrumFrame = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
     Graphics g (spectrumFrame);
@@ -362,12 +365,15 @@ SpectrumDifference::~SpectrumDifference()
 }
 void SpectrumDifference::paint (Graphics& g)
 {
-    std::lock_guard<std::mutex> lock (m);
+//    std::lock_guard<std::mutex> lock (m);
+    createFrame();
     g.drawImage (mainFrame, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
 }
 void SpectrumDifference::createFrame()
 {
-    std::lock_guard<std::mutex> lock (m);
+    std::unique_lock<std::mutex> lock (m, std::try_to_lock);
+    if(!lock.owns_lock())
+        return;
 
     mainFrame = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
     Graphics g (mainFrame);
@@ -885,11 +891,16 @@ PhaseDifference::~PhaseDifference()
 }
 void PhaseDifference::paint (Graphics& g)
 {
-    std::lock_guard<std::mutex> lock (m);
+//    std::lock_guard<std::mutex> lock (m);
+    createFrame();
     g.drawImage (mainFrame, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
 }
 void PhaseDifference::createFrame()
 {
+    std::unique_lock<std::mutex> lock (m, std::try_to_lock);
+    if(!lock.owns_lock())
+        return;
+
     mainFrame = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
     Graphics g (mainFrame);
     
@@ -1348,11 +1359,16 @@ StereoAnalyser::~StereoAnalyser()
 }
 void StereoAnalyser::paint (Graphics& g)
 {
-    std::lock_guard<std::mutex> lock (m);
+//    std::lock_guard<std::mutex> lock (m);
+    createFrame();
     g.drawImage (mainFrame, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
 }
 void StereoAnalyser::createFrame()
 {
+    std::unique_lock<std::mutex> lock (m, std::try_to_lock);
+    if(!lock.owns_lock())
+        return;
+
     mainFrame = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
     Graphics g (mainFrame);
 
@@ -1609,8 +1625,6 @@ mainAudioBufferSystem(buffManag)
     setOpaque(false);
     
     rmsWindowLength = sR * 0.8f;
-    
-//    maxValueInPixel  = std::deque<float>  ( getWidth(), 0);
     newMaxValueInPixel  = std::vector<float> ( getWidth(), 0.f);
     
     oldIndexPosition = 0;
@@ -1627,11 +1641,10 @@ void WaveformAnalyser::paint (Graphics& g)
 }
 void WaveformAnalyser::createFrame()
 {
-//    std::lock_guard<std::mutex> lock (m);
-//    std::unique_lock<std::mutex> lock (m, std::try_to_lock);
-//    if(!lock.owns_lock())
-//        return;
-    
+    std::unique_lock<std::mutex> lock (m, std::try_to_lock);
+    if(!lock.owns_lock())
+        return;
+
     mainFrame = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
     Graphics g (mainFrame);
 
@@ -1648,9 +1661,6 @@ void WaveformAnalyser::createCurbes ()
 }
 void WaveformAnalyser::createWaveform ()
 {
-    waveformImage = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
-    Graphics g (waveformImage);
-    
     const int width = getWidth();
     const int height = getHeight();
     const int sampleRate = sampleRateAt.load();
@@ -1673,12 +1683,7 @@ void WaveformAnalyser::createWaveform ()
     audioBlockPre.clear();
     mainAudioBufferSystem.bufferPre.copySamplesFromHistoryBuffer(audioBlockPre, numOfNewSamples);
     
-//    for (int i = 0; i < width - numOfNewPixelValues; ++i)
-//        std::memcpy (&newMaxValueInPixel[i], &newMaxValueInPixel[i + numOfNewPixelValues], sizeof(float));
-    
-    // corruption?
     FloatVectorOperations::copy (&newMaxValueInPixel[0], &newMaxValueInPixel[numOfNewPixelValues], width - numOfNewPixelValues);
-    
     for (auto i = 0; i < numOfNewPixelValues; ++i)
     {
         int index = i * numOfSamplesPerPixel;
@@ -1690,7 +1695,7 @@ void WaveformAnalyser::createWaveform ()
         FloatVectorOperations::add (sampleGroup.getWritePointer(0), sampleGroup.getReadPointer(1), numOfSamplesPerPixel);
         float maxInSampleGroup = FloatVectorOperations::findMaximum (sampleGroup.getReadPointer(0), numOfSamplesPerPixel);
 
-        float newPixelValue = height - (maxInSampleGroup * height * 2);
+        float newPixelValue = height - (maxInSampleGroup * height);
         if (! isPositiveAndBelow (newPixelValue, height))
         {
             if ( newPixelValue < 0 ) newPixelValue = 0;
@@ -1699,31 +1704,6 @@ void WaveformAnalyser::createWaveform ()
         std::memcpy (&newMaxValueInPixel [width - numOfNewPixelValues + i], &newPixelValue, sizeof(float));
     }
     
-    
-//    if(numOfNewPixelValues == 0)
-//    {
-//        maxValueInPixel.pop_front();
-//        maxValueInPixel.push_back(maxValueInPixel.back());
-//    }
-
-//    for (int i = 0; i < 5; ++i)
-//    {
-//        counter++;
-//        float newPixelValue = (counter / 200.f) * height;
-//        maxValueInPixel.pop_front();
-//        maxValueInPixel.push_back(newPixelValue);
-//        if (counter >= 200) counter = 0;
-//    }
-
-//    Path waveformPath;
-//    waveformPath.startNewSubPath(0, height);
-    
-    
-//    for (int i = 0; i < width - 5; ++i)
-//    {
-//        std::memcpy (&newMaxValueInPixel[i], &newMaxValueInPixel[i + 5], sizeof(float));
-//    }
-//
 //    for (int i = 0; i < 5; ++i)
 //    {
 //        counter++;
@@ -1731,45 +1711,49 @@ void WaveformAnalyser::createWaveform ()
 //        std::memcpy (&newMaxValueInPixel [width - 5 + i], &newPixelValue, sizeof(float));
 //        if (counter >= 200) counter = 0;
 //    }
-    g.setOpacity (1.0f);
-    if (numOfNewPixelValues == 12 )
-    {
-        g.setColour  (Colours::red);
-        g.fillRect(0, 0, width, 40);
-    }
-    else if (numOfNewPixelValues == 6)
-    {
-        g.setColour  (Colours::yellow);
-        g.fillRect(0, 0, width, 40);
-    }
-    else if (numOfNewPixelValues == 3)
-    {
-        g.setColour  (Colours::green);
-        g.fillRect(0, 0, width, 40);
-    }
-
-    g.setColour  (Colours::whitesmoke);
-    g.setOpacity (1.0f);
     
+    waveformImage = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
+    Graphics g (waveformImage);
+    
+//    g.setOpacity (1.0f);
+//    if (numOfNewPixelValues == 12 )
+//    {
+//        g.setColour  (Colours::red);
+//        g.fillRect(0, 0, width, 40);
+//    }
+//    else if (numOfNewPixelValues == 6)
+//    {
+//        g.setColour  (Colours::yellow);
+//        g.fillRect(0, 0, width, 40);
+//    }
+//    else if (numOfNewPixelValues == 3)
+//    {
+//        g.setColour  (Colours::green);
+//        g.fillRect(0, 0, width, 40);
+//    }
+
+    Path waveformPath;
+    waveformPath.startNewSubPath(0, height);
+    g.setOpacity(1.0f);
+    g.setColour(Colours::whitesmoke);
     int x = 0;
     for (float valueInPixel : newMaxValueInPixel)
     {
+//        waveformPath.lineTo (x, valueInPixel);
         g.drawVerticalLine (x, valueInPixel, height);
         ++x;
     }
- 
-    
-//    for (float valueInPixel : maxValueInPixel)
-//    {
-//        g.drawVerticalLine (x, valueInPixel, height);
-//        ++x;
-//    }
-    oldIndexPosition = newIndexPosition;
-    
-    
-    
-//    waveformPath.lineTo (width, height);
-//    g.strokePath (waveformPath, PathStrokeType (1.3, PathStrokeType::beveled));
+//    waveformPath.lineTo(width, height);
+//    waveformPath.closeSubPath();
+//    oldIndexPosition = newIndexPosition;
+//
+//    g.setColour  (Colours::whitesmoke);
+//    g.setOpacity (1.0f);
+//    g.strokePath (waveformPath, PathStrokeType (1.7f, PathStrokeType::beveled));
+//
+//    g.setColour  (Colours::whitesmoke.darker());
+//    g.setOpacity (1.0f);
+//    g.fillPath (waveformPath);
 }
 
 void WaveformAnalyser::processAllFftData () {}

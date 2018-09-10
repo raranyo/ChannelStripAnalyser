@@ -26,6 +26,8 @@ public:
     void resized() override;
     void sliderValueChanged (Slider* sliderThatWasMoved) override;
     void buttonClicked (Button* buttonThatWasClicked) override;
+    
+    std::atomic<int> diffcount;
 
 private:
     

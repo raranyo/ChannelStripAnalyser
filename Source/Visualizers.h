@@ -225,7 +225,6 @@ public:
     
     int numOfNewPixelsToPaint = 0;
 
-    
 private:
     void processAllFftData ();
     void createWaveform ();

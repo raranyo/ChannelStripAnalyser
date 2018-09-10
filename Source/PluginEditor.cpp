@@ -117,7 +117,7 @@ ChannelStripAnalyserAudioProcessorEditor::ChannelStripAnalyserAudioProcessorEdit
     addAndMakeVisible
         (stereoAnalyser     = new StereoAnalyser     (sampleRate, fftSize, 15, 200, mainAudioBufferSystem, forwFFT));
     addAndMakeVisible
-        (waveformAnalyser   = new WaveformAnalyser   (sampleRate, fftSize, 6, 0, 120, mainAudioBufferSystem));
+        (waveformAnalyser   = new WaveformAnalyser   (sampleRate, fftSize, 8, 0, 120, mainAudioBufferSystem));
     
     createParametersAttachments();
     
@@ -131,7 +131,8 @@ ChannelStripAnalyserAudioProcessorEditor::ChannelStripAnalyserAudioProcessorEdit
     }
     
     Timer::startTimer(50);
-    HighResolutionTimer::startTimer(43);
+    diffcount.store(0);
+//    HighResolutionTimer::startTimer(43);
 }
 
 ChannelStripAnalyserAudioProcessorEditor::~ChannelStripAnalyserAudioProcessorEditor()
@@ -142,41 +143,30 @@ ChannelStripAnalyserAudioProcessorEditor::~ChannelStripAnalyserAudioProcessorEdi
 void ChannelStripAnalyserAudioProcessorEditor::hiResTimerCallback()
 {
 //    cancelPendingUpdate();
-//    mainAudioBufferSystem.pushAudioBufferIntoHistoryBuffer();
-//    triggerAsyncUpdate();
-    
-    const MessageManagerLock mmLock;
     mainAudioBufferSystem.pushAudioBufferIntoHistoryBuffer();
-    waveformAnalyser   -> repaint();
+    triggerAsyncUpdate();
+    ++diffcount;
 
-//    if (mainAudioBufferSystem.visualizersSemaphore.load() == 0)
-//    {
-//
-
-//    const MessageManagerLock mmLock;
-//    mainAudioBufferSystem.visualizersSemaphore.store(5);
-//        spectrumAnalyser   -> createFrame();
-//        spectrumDifference -> createFrame();
-//        phaseDifference    -> createFrame();
-//        stereoAnalyser     -> createFrame();
-//        waveformAnalyser   -> createFrame();
-//        spectrumAnalyser   -> repaint();
-//        spectrumDifference -> repaint();
-//        phaseDifference    -> repaint();
-//        stereoAnalyser     -> repaint();
-//        waveformAnalyser   -> repaint();
-
-//    }
 }
 void ChannelStripAnalyserAudioProcessorEditor::handleAsyncUpdate()
 {
+//    spectrumAnalyser   -> createFrame();
+//    spectrumDifference -> createFrame();
+//    phaseDifference    -> createFrame();
+//    stereoAnalyser     -> createFrame();
 //    waveformAnalyser   -> createFrame();
-//    waveformAnalyser   -> repaint();
+    --diffcount;
+//    spectrumAnalyser   -> repaint();
+//    spectrumDifference -> repaint();
+//    phaseDifference    -> repaint();
+//    stereoAnalyser     -> repaint();
+    waveformAnalyser   -> repaint();
 }
 
 void ChannelStripAnalyserAudioProcessorEditor::timerCallback()
 {
-    
+    if ( ! HighResolutionTimer::isTimerRunning())
+        HighResolutionTimer::startTimer(43);
     // checking flag states for plugin deletion, creation and re-creation
     for(auto i=0; i<6; i++)
     {
@@ -200,6 +190,13 @@ void ChannelStripAnalyserAudioProcessorEditor::timerCallback()
         if (processor.plugIns[i]) processor.shownPlugins[i] = editors[i]->isVisible();
 
     }
+//    --diffcount;
+//    spectrumAnalyser   -> repaint();
+//    spectrumDifference -> repaint();
+//    phaseDifference    -> repaint();
+//    stereoAnalyser     -> repaint();
+//    waveformAnalyser   -> repaint();
+
     // needs to block audioThread in order to get last delay in graph data
     // processor.graph.prepareToPlay (processor.asampleRate.load(), processor.ablockSize.load());
     String totalDelay   = (String) ( processor.graph.getLatencySamples());
@@ -207,7 +204,8 @@ void ChannelStripAnalyserAudioProcessorEditor::timerCallback()
     float rest = std::fmod(position, 4);
     String playPosition = (String) ( rest );
     String numOfNewPixels   = (String) ( waveformAnalyser->numOfNewPixelsToPaint);
-    textEditorTotalDelay -> setText(numOfNewPixels);
+    String diffCount   = (String) ( diffcount.load());
+    textEditorTotalDelay -> setText(diffCount);
     //repaintVisualizers();
     
     
