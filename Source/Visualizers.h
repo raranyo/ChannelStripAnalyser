@@ -1,5 +1,4 @@
 #pragma once
-
 #include "../JuceLibraryCode/JuceHeader.h"
 #include "spline.h"
 #include "PluginProcessor.h"
@@ -32,7 +31,6 @@ private:
     void peakHolder (int i, float& magLin, std::vector<float>& maxValues, double &decayRatio);
     void createPath (std::vector<double>& magnitudeDBmono, Path &drawPath);
     void createNewAxis ();
-    void createShadeWindow();
     
     std::vector<float> maxValuesPre;
     std::vector<float> maxValuesPost;
@@ -43,22 +41,15 @@ private:
     Image spectrumFrame;
     Image axisImage;
     Image shadeWindow;
-    AudioBuffer<float> windowTable;
     
-    //dsp::FFT forwardFFT;
     AudioBufferManagement& mainAudioBufferSystem;
     forwardFFT& forwFFT;
     std::mutex m;
-    // LOG INTERPOLATION OBJS
-    //tk::spline spline;
-    //std::vector<double> indexes;
-    //std::vector<double> conversionTable;
 };
 
 //==============================================================================
 class SpectrumDifference  : public Component
 {
-    
 public:
     typedef std::vector<std::vector<float>> floatMatrix;
     typedef AudioBufferManagement::audioBufferManagementType audioBufferManagementType;
@@ -82,7 +73,6 @@ private:
     void peakHolder (int i, float& magLin, floatMatrix &historySamples);
     void createPath (std::vector<double>& magnitudeDBmono, Path &drawPath);
     void createNewAxis ();
-    void createShadeWindow();
 
     AudioBufferManagement& mainAudioBufferSystem;
     forwardFFT& forwFFT;
@@ -128,7 +118,6 @@ private:
     void peakHolder (int i, float& magLin, floatMatrix &historySamples);
     void createPath (std::vector<double>& magnitudeDBmono, Path &drawPath);
     void createNewAxis ();
-    void createShadeWindow();
     
     AudioBufferManagement& mainAudioBufferSystem;
     forwardFFT& forwFFT;
@@ -139,13 +128,12 @@ private:
     
     floatMatrix historyValues1;
     floatMatrix historyValues2;
+    int numOfHistorySamples = 0;
     
     floatMatrix conversionTable;
     Image mainFrame;
     Image axisImage;
     Image shadeWindow;
-    
-    int numOfHistorySamples = 0;
 };
 
 //==============================================================================
@@ -164,7 +152,7 @@ public:
         float corrRest;
     };
     
-    StereoAnalyser(int sR, int bS, int nS, int z, AudioBufferManagement& mainAudioBufferSystem, forwardFFT& fFFT);
+    StereoAnalyser(int sR, int bS, AudioBufferManagement& mainAudioBufferSystem, forwardFFT& fFFT);
     ~StereoAnalyser();
     
     void paint (Graphics& g) override;
@@ -185,7 +173,6 @@ private:
 
     AudioBufferManagement& mainAudioBufferSystem;
     forwardFFT& forwFFT;
-    std::mutex m;
 
     pairFloatMatrix setOfPointsHistDataPre;
     pairFloatMatrix setOfPointsHistDataPost;
@@ -203,58 +190,89 @@ private:
     Image lissajouCurbe;
     Image correlationBackground;
     Image correlationLines;
+    Image shadeWindow;
 };
 
 //==============================================================================
 class WaveformAnalyser  : public Component
 {
-    
 public:
-    WaveformAnalyser(int sR, int bs, int mode, float cP, float bpm, AudioBufferManagement& mainAudioBufferSystem);
+    typedef std::pair<float, float> pairOfFloats;
+    
+    WaveformAnalyser(int sR, int bs, AudioBufferManagement& mainAudioBufferSystem);
     ~ WaveformAnalyser();
     
     void paint (Graphics& g) override;
-    void createFrame();
     void resized() override;
     
     std::atomic<int> blockSizeAt;
     std::atomic<int> sampleRateAt;
     std::atomic<int> modeAt;
-    std::atomic<int> hostBpmAt;
-    std::atomic<double> currentPositionAt;
+    std::atomic<int> rangeAt;
+    std::atomic<float> gainAt;
     
-    int numOfNewPixelsToPaint = 0;
+    std::atomic<bool> axisNeedsUpdate;
 
 private:
-    void processAllFftData ();
-    void createWaveform ();
-    void createCurbes ();
+    void createFrame();
+    void processData ();
     void createNewAxis ();
     
     AudioBufferManagement& mainAudioBufferSystem;
-    std::mutex m;
     
-    int oldIndexPosition;
-    
-    std::deque<float> monoDataBufferPre;
-//    std::deque<std::vector<float>> monoDataBufferPost;
-    
-    std::deque<float> maxValueInPixel;
-    
-    std::vector<float> newMaxValueInPixel;
-
     int rmsWindowLength;
     
-    Image mainFrame;
+    std::vector<Range<float>> historyBufferMinMaxPre;
+    std::vector<Range<float>> historyBufferMinMaxPost;
+
+    std::vector<float> historyBufferPost;
+    std::vector<float> historyBufferPre;
+    std::vector<float> rmsGainBuffer;
+
+    Path rmsGainPath;
     Image axisImage;
     Image waveformImage;
-    Image curbesImage;
-    
-    int counter = 0;
 };
 
-
 //==============================================================================
+class LevelMeter  : public Component
+{
+public:
+    
+    struct SetOfValuesToPaint
+    {
+        std::pair<float, float> rmsLevelPost;
+        std::pair<float, float> peakLevelPost;
+        std::pair<float, float> oldPeakLevelPost;
+        std::pair<float, float> rmsLevelDifference;
+        std::pair<float, float> peakLevelDifference;
+        std::pair<float, float> oldPeakLevelDifference;
 
+    };
+    
+    LevelMeter(int sR, int bs, AudioBufferManagement& mainAudioBufferSystem);
+    ~LevelMeter();
+    
+    void paint (Graphics& g) override;
+    void resized() override;
+    
+    std::atomic<int> blockSizeAt;
+    std::atomic<int> sampleRateAt;
+    
+private:
+    void createFrame();
+    void processData();
+    void createNewAxis();
+    void peakHolder();
+    
+    AudioBufferManagement& mainAudioBufferSystem;
+    
+    int rmsWindowLength;
+    SetOfValuesToPaint setOfValuesToPaint;
+    
+    Path rmsGainPath;
+    Image axisImage;
+    Image waveformImage;
+};
 
 

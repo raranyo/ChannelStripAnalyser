@@ -16,6 +16,10 @@
 
 // DEFINING PARAMETERS
 
+#define SLIDER_WAVEFORM_RANGE_ID "sliderCurbeOffset"
+#define SLIDER_WAVEFORM_RANGE_NAME "SliderCurbeOffset"
+#define SLIDER_WAVEFORM_TIMEMODE_ID "sliderDifferenceGain"
+#define SLIDER_WAVEFORM_TIMEMODE_NAME "SliderDifferenceGain"
 #define SLIDER_RANGE_VECTORSCOPE_ID "sliderRangeVectorscope"
 #define SLIDER_RANGE_VECTORSCOPE_NAME "SliderRangeVectorscope"
 #define SLIDER_VANISH_TIME_ID "sliderVanishTime"
@@ -24,16 +28,6 @@
 #define SLIDER_RANGE_SPECTRUM_ANALYSER_NAME "SliderRangeSpectrumAnalyser"
 #define SLIDER_RETURN_TIME_ID "sliderReturnTime"
 #define SLIDER_RETURN_TIME_NAME "SliderReturnTime"
-#define SLIDER_CURBE_OFFSET_ID "sliderCurbeOffset"
-#define SLIDER_CURBE_OFFSET_NAME "SliderCurbeOffset"
-#define SLIDER_DIFFERENCE_GAIN_ID "sliderDifferenceGain"
-#define SLIDER_DIFFERENCE_GAIN_NAME "SliderDifferenceGain"
-#define SLIDER_RMS_WINDOW_ID "sliderRMSWindow"
-#define SLIDER_RMS_WINDOW_NAME "SliderRMSWindow"
-#define SLIDER_ZOOM_X_ID "sliderZommX"
-#define SLIDER_ZOOM_X_NAME "SliderZommX"
-#define SLIDER_ZOOM_Y_ID "sliderZommY"
-#define SLIDER_ZOOM_Y_NAME "SliderZommY"
 #define SLIDER_TIME_AVERAGE_ID "sliderTimeAverage"
 #define SLIDER_TIME_AVERAGE_NAME "SliderTimeAverage"
 #define SLIDER_RANGE_SPECTRUM_DIFFERENCE_ID "sliderRangeSpectrumDifference"
@@ -93,6 +87,8 @@ public:
         void reset (int ch, int sAb, int sHb);
         void writeBufferIntoAudioBuffer   ( AudioBuffer<float> &fromBuffer, int numOfSamples );
         void copySamplesFromHistoryBuffer ( AudioBuffer<float> &toBuffer, int numOfSamples );
+        float getRMSMonoValueInSample (int samplesInThePast, int windowSize);
+        float getRMSChannelValueInSample (int samplesInThePast, int windowSize, int channel);
         int getLastIndexPositionInHistoryBuffer();
     };
     
@@ -137,19 +133,22 @@ private:
 //==============================================================================
 struct forwardFFT
 {
-    dsp::FFT forwFFT;
+    std::unique_ptr <dsp::FFT> forwFFT;
     AudioBuffer<float> windowTable;
     int fftSize;
-    
+    std::mutex m;
+
     forwardFFT (int fS, int nC)
-    : forwFFT (std::log2(fS)),
+    :
     windowTable ( nC, fS * 2),
     fftSize(fS)
     {
+        forwFFT = std::make_unique<dsp::FFT>(std::log2(fS));
         createWindowTable();
     }
     void createWindowTable();
     void performFFT( AudioBuffer<float>& audioBuffer);
+    void changeFFTSize( int newSize);
 };
 
 
@@ -196,11 +195,9 @@ public:
     void AudioPluginChannelConfiguration();
     void createPluginProcessor (const PluginDescription* desc, int i);
     void deletePluginProcessor (int i);
-    AudioBuffer<float>& getAudioBuffers (int bufferPreOrPost);
-    
     void createParameters();
-    void createWindowTable();
-
+    void triggerGraphPrepareToPlay(); 
+    
     // Objects for owned windows ===================================================
     AudioPluginFormatManager formatManager;
     KnownPluginList knownPluginList;
@@ -214,15 +211,6 @@ public:
     bool shownPlugins[6];
     bool recalledPlugins[6];
     
-    std::atomic <bool> audioThreadIsProcessing;
-    std::atomic <bool> messageThreadIsCopying;
-    
-    std::atomic <bool> readedTheSameBlock;
-    std::atomic <bool> copyiedTheSameBlock;
-    std::atomic <bool> isAccessingTheBuffer;
-
-    int fftSize = 2048;
-
     AudioProcessorGraph graph;
     AudioPlayHead::CurrentPositionInfo currentPosition;
     

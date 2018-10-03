@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<JUCERPROJECT name="ChannelStripAnalyser" projectType="audioplug" buildStandalone="1"
-              jucerVersion="5.3.0">
+<JUCERPROJECT name="ChannelStripAnalyser" projectType="audioplug" jucerVersion="5.3.0">
   <MAINGROUP id="qdP8fX" name="ChannelStripAnalyser">
     <GROUP id="{2A33EDA4-A31F-44B5-50FF-DB0A5BFEA0B0}" name="Source">
       <FILE id="vpwH0S" name="PluginProcessor.cpp" compile="1" resource="0"

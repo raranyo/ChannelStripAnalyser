@@ -1,6 +1,7 @@
   #include "Visualizers.h"
 
 //==============================================================================
+// SPECTRUM ANALYSER
 SpectrumAnalyser::SpectrumAnalyser(int sR, int fS, int cH, AudioBufferManagement& buffManag, forwardFFT& fFFT)
 :
 axisNeedsUpdate(true),
@@ -12,10 +13,9 @@ forwFFT(fFFT)
     setTopLeftPosition(9,265); //7, 263
     setSize (710, 277); // 714,281
     setVisible(true);
-    toFront(true);
-    setOpaque(false);
+    setPaintingIsUnclipped(true);
+    setOpaque(true);
 
-    //indexes.            clear(); LOG INTERP.
     conversionTable.    clear();
     maxValuesPre.       clear();
     maxValuesPost.      clear();
@@ -33,7 +33,6 @@ forwFFT(fFFT)
     // Init. the data & indexes Vectors
     for (auto i = 0; i < fftSize; i++)
     {
-        //indexes.     push_back(i); LOG INTERP.
         maxValuesPre.   push_back(0);
         maxValuesPost.   push_back(0);
     }
@@ -57,34 +56,31 @@ forwFFT(fFFT)
         conversionTable.push_back(convTab);
     }
 }
+
 SpectrumAnalyser::~SpectrumAnalyser()
 {
 }
+
 void SpectrumAnalyser::paint (Graphics& g)
 {
-//    std::lock_guard<std::mutex> lock (m);
     createFrame();
     g.drawImage (spectrumFrame, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
 }
+
 void SpectrumAnalyser::createFrame()
 {
-    std::unique_lock<std::mutex> lock (m, std::try_to_lock);
-    if(!lock.owns_lock())
-        return;
 
-    spectrumFrame = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
+    spectrumFrame = Image(Image::PixelFormat::RGB, getWidth(), getHeight(), true);
     Graphics g (spectrumFrame);
     
     g.setColour (Colour (0xff0f0f1c));
     g.fillRoundedRectangle(0, 0, getWidth(), getHeight(), 8.0f);
-    
+
     if ( axisNeedsUpdate.load())
     {
         createNewAxis();
         axisNeedsUpdate.store(false);
     }
-    g.drawImage (axisImage, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
-    
     processAllFftData (mainAudioBufferSystem.bufferPre,  monoMagDataPre,  maxValuesPre);
     processAllFftData (mainAudioBufferSystem.bufferPost, monoMagDataPost, maxValuesPost);
     
@@ -93,13 +89,6 @@ void SpectrumAnalyser::createFrame()
     createPath (monoMagDataPre,  drawPathPre);
     createPath (monoMagDataPost, drawPathPost);
     
-    g.setColour  (Colours::whitesmoke);
-    g.setOpacity (1.0f);
-    g.strokePath (drawPathPost, PathStrokeType (1.3, PathStrokeType::beveled));
-    g.setColour  (Colours::transparentWhite);
-    g.setOpacity (0.1f);
-    g.fillPath   (drawPathPost);
-    
     g.setColour  (Colours::lightgrey);
     g.setOpacity (0.3f);
     g.strokePath (drawPathPre, PathStrokeType(1, PathStrokeType::beveled));
@@ -107,8 +96,18 @@ void SpectrumAnalyser::createFrame()
     g.setOpacity (0.1f);
     g.fillPath   (drawPathPre);
     
-    --mainAudioBufferSystem.visualizersSemaphore;
+    g.setColour  (Colours::whitesmoke);
+    g.setOpacity (1.0f);
+    g.strokePath (drawPathPost, PathStrokeType (1.3, PathStrokeType::beveled));
+    g.setColour  (Colours::transparentWhite);
+    g.setOpacity (0.1f);
+    g.fillPath   (drawPathPost);
+    
+    g.setOpacity(1.0f);
+    g.drawImage (shadeWindow, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
+    g.drawImage (axisImage, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
 }
+
 void SpectrumAnalyser::createPath ( std::vector<double>& magnitudeDBmono, Path &drawPath)
 {
     int maxRange;
@@ -140,6 +139,7 @@ void SpectrumAnalyser::createPath ( std::vector<double>& magnitudeDBmono, Path &
     }
     drawPath.lineTo(getWidth(), getHeight());
 }
+
 void SpectrumAnalyser::processAllFftData (audioBufferManagementType& buffer,  std::vector<double>& magintudeDbMono, std::vector<float>& maxValues )
 {
     magintudeDbMono.clear();
@@ -173,6 +173,7 @@ void SpectrumAnalyser::processAllFftData (audioBufferManagementType& buffer,  st
         magintudeDbMono.push_back(magInDb);
     }
 }
+
 void SpectrumAnalyser::peakHolder(int index, float& magLin, std::vector<float>& maxValues, double &decayRatio)
 {
     if ( maxValues[index] > magLin )
@@ -185,10 +186,12 @@ void SpectrumAnalyser::peakHolder(int index, float& magLin, std::vector<float>& 
         maxValues[index] = magLin;
     }
 }
+
 void SpectrumAnalyser::resized() {}
+
 void SpectrumAnalyser::createNewAxis()
 {
-    axisImage = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
+    axisImage = Image(Image::PixelFormat::RGB, getWidth(), getHeight(), true);
     Graphics g (axisImage);
     
     int height = getHeight();
@@ -218,11 +221,10 @@ void SpectrumAnalyser::createNewAxis()
         g.setColour(Colours::lightgrey);
         g.setOpacity(0.3);
         g.drawVerticalLine(freq2draw, 0, height);
+        g.setOpacity(1.0f);
         g.setColour(Colours::white);
-        
-        g.setFont(10);
+        g.setFont(11.f);
         g.drawText((String)fo, freq2draw + 10, height - 17, 50, 20, juce::Justification::left, true);
-        
     }
     
     for (int i = 1; i <= 18; i++)
@@ -230,12 +232,12 @@ void SpectrumAnalyser::createNewAxis()
         int fo;
         switch (i)
         {
-            case 1: fo = 30; break; case 2: fo = 40; break; case 3: fo = 60; break;
-            case 4: fo = 70; break; case 5: fo = 80; break; case 6: fo = 90; break;
-            case 7: fo = 300; break; case 8: fo = 400; break; case 9: fo = 600; break;
-            case 10: fo = 700; break; case 11: fo = 800; break; case 12: fo = 900; break;
-            case 13: fo = 3000; break; case 14: fo = 4000; break; case 15: fo = 6000; break;
-            case 16: fo = 7000; break; case 17: fo = 8000; break; case 18: fo = 9000; break;
+            case 1: fo = 30;     break;  case 2: fo = 40;     break;  case 3: fo = 60;     break;
+            case 4: fo = 70;     break;  case 5: fo = 80;     break;  case 6: fo = 90;     break;
+            case 7: fo = 300;    break;  case 8: fo = 400;    break;  case 9: fo = 600;    break;
+            case 10: fo = 700;   break;  case 11: fo = 800;   break;  case 12: fo = 900;   break;
+            case 13: fo = 3000;  break;  case 14: fo = 4000;  break;  case 15: fo = 6000;  break;
+            case 16: fo = 7000;  break;  case 17: fo = 8000;  break;  case 18: fo = 9000;  break;
         }
         float freq2draw = (width / std::log((sampleRate / 2) / 10))*std::log(fo / 10);
         g.setColour(Colours::grey);
@@ -252,24 +254,25 @@ void SpectrumAnalyser::createNewAxis()
             case 7:  fo = -maxRange + (maxRange/12) * (12 - i); break;  case 8:  fo = -maxRange + (maxRange/12) * (12 - i); break;  case 9:  fo = -maxRange + (maxRange/12) * (12 - i); break;
             case 10: fo = -maxRange + (maxRange/12) * (12 - i); break;  case 11: fo = -maxRange + (maxRange/12) * (12 - i); break;  case 12: fo = -maxRange + (maxRange/12) * (12 - i); break;
         }
-        g.setColour(Colours::dimgrey);
-        
+
         if (i % 2 == 0){
             if (i == 0 || i == 12){
                 
                 g.setOpacity(0.5);
                 g.drawHorizontalLine (height * (i / 12.0f), 30, (float)width - 10);
-                g.setColour (Colours::white);
-                g.setFont (10);
-                g.drawText ((String)fo, 5, i*(height / 12.0f) - 5, 50, 20, juce::Justification::left, true);
+                g.setOpacity(1.0f);
+                g.setColour(Colours::white);
+                g.setFont(11.f);
+                g.drawText ((String)fo, 10, i *(height / 12.0f) - 5, 50, 20, juce::Justification::left, true);
             }
             else{
                 g.setColour(Colours::lightgrey);
                 g.setOpacity(0.3);
                 g.drawHorizontalLine(height*(i / 12.0f), 30, (float)width - 10);
+                g.setOpacity(1.0f);
                 g.setColour(Colours::white);
-                g.setFont(10);
-                g.drawText((String)fo, 5, i*(height / 12.0f) - 10, 50, 20, juce::Justification::left, true);
+                g.setFont(11.f);
+                g.drawText((String)fo, 10, i*(height / 12.0f) - 10, 50, 20, juce::Justification::left, true);
             }
         }
         else{
@@ -278,27 +281,30 @@ void SpectrumAnalyser::createNewAxis()
             g.drawHorizontalLine(height*(i / 12.0f), 0, (float)width - 10);
         }
     }
+    
+    shadeWindow = Image(Image::PixelFormat::RGB, getWidth(), getHeight(), true);
+    Graphics g2 (shadeWindow);
+    for (int i = 0; i < 20; i++)
+    {
+        float opacity = (float(i) + 30) / 50;
+        g2.setColour(Colours::black.withAlpha(isPositiveAndBelow(1 - opacity, 1) ? 1 - opacity : 0.f));
+        g2.drawVerticalLine   (width - i, 0, height);
+        g2.drawHorizontalLine (i, 0, width);
+        g2.drawHorizontalLine (height - i, 0, width);
+    }
+    for (int i = 0; i < 50; i++)
+    {
+        float opacity = (float(i) + 20) / 50.f;
+        g2.setColour(Colours::black);
+        g2.setOpacity(isPositiveAndBelow(1 - opacity, 1) ? 1 - opacity : 0.f);
+        g2.drawVerticalLine(i, 0, height);
+    }
     axisNeedsUpdate.store(false);
 }
-void SpectrumAnalyser::createShadeWindow()
-{
-    shadeWindow = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
-    Graphics g (shadeWindow);
-    
-    int height = getHeight();
-    int width  = getWidth();
-    
-    for (auto i = 0; i < 10; ++i)
-    {
-        float opacity = ((10 - i) / 10.f) * 0.5f;
-        g.setColour (Colour(Colours::black));
-        g.setOpacity(opacity);
-        g.drawHorizontalLine(i, 0, width);
-        g.drawHorizontalLine(height - i, 0, width);
-    }
-}
+
 
 //==============================================================================
+// SPECTRUM DIFFERENCE
 SpectrumDifference::SpectrumDifference(int sR, int fS, int cH, AudioBufferManagement& buffManag, forwardFFT& fFFT)
 :
     axisNeedsUpdate(true),
@@ -313,9 +319,9 @@ SpectrumDifference::SpectrumDifference(int sR, int fS, int cH, AudioBufferManage
     setTopLeftPosition(9,552); //7, 263
     setSize (710, 116); // 714,281
     setVisible(true);
-    toFront(true);
-    setOpaque(false);
-    
+    setPaintingIsUnclipped(true);
+    setOpaque(true);
+
     numOfHistorySamples = numOfHistorySamplesAt.load();
     
     conversionTable.    clear();
@@ -327,15 +333,14 @@ SpectrumDifference::SpectrumDifference(int sR, int fS, int cH, AudioBufferManage
     int numOfHistorySamples = numOfHistorySamplesAt.load();
     
     createNewAxis();
-    createShadeWindow();
 
     // Init. the data & indexes Vectors
     for (auto i = 0; i < fftSize; i++)
     {
         linGainData1. push_back(0);
         linGainData2. push_back(0);
-        historyValues1.push_back (std::vector<float> (numOfHistorySamples, 0));
-        historyValues2.push_back (std::vector<float> (numOfHistorySamples, 0));
+        historyValues1.push_back (std::vector<float> (numOfHistorySamples, 1.0f));
+        historyValues2.push_back (std::vector<float> (numOfHistorySamples, 1.0f));
     }
     
     for (auto i = 0; i < getWidth(); i++)
@@ -360,28 +365,28 @@ SpectrumDifference::SpectrumDifference(int sR, int fS, int cH, AudioBufferManage
         conversionTable.push_back(convTab);
     }
 }
+
 SpectrumDifference::~SpectrumDifference() 
 {
 }
+
 void SpectrumDifference::paint (Graphics& g)
 {
-//    std::lock_guard<std::mutex> lock (m);
     createFrame();
     g.drawImage (mainFrame, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
 }
+
 void SpectrumDifference::createFrame()
 {
-    std::unique_lock<std::mutex> lock (m, std::try_to_lock);
-    if(!lock.owns_lock())
-        return;
 
-    mainFrame = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
+    mainFrame = Image(Image::PixelFormat::RGB, getWidth(), getHeight(), true);
     Graphics g (mainFrame);
 
+    g.setColour (Colour (0xff0f0f1c));
+    g.fillRoundedRectangle(0, 0, getWidth(), getHeight(), 8.0f);
+
     if ( axisNeedsUpdate.load() ) createNewAxis();
-    
-    g.drawImage (axisImage, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
-    
+
     processAllFftData (mainAudioBufferSystem.bufferPre, mainAudioBufferSystem.bufferPost, linGainData1, linGainData2 );
     
     if (analyseMode.load() == 1 )
@@ -420,9 +425,11 @@ void SpectrumDifference::createFrame()
         g.setOpacity (1.0f);
         g.strokePath (drawPath2, PathStrokeType (1.3, PathStrokeType::beveled));
     }
+    
     g.drawImage (shadeWindow, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
-    --mainAudioBufferSystem.visualizersSemaphore;
+    g.drawImage (axisImage, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
 }
+
 void SpectrumDifference::createPath ( std::vector<double>& magnitudeDBmono, Path &drawPath)
 {
     int maxRange;
@@ -449,6 +456,7 @@ void SpectrumDifference::createPath ( std::vector<double>& magnitudeDBmono, Path
     }
     drawPath.lineTo(getWidth(), getHeight()/2.f);
 }
+
 void SpectrumDifference::processAllFftData (audioBufferManagementType& bufferPre, audioBufferManagementType& bufferPost, std::vector<double>& linGain1, std::vector<double>& linGain2 )
 {
     linGain1.clear();
@@ -590,6 +598,7 @@ void SpectrumDifference::processAllFftData (audioBufferManagementType& bufferPre
         }
     }
 }
+
 void SpectrumDifference::peakHolder(int index, float& magLin, floatMatrix &historySamples)
 {
     if (numOfHistorySamples != numOfHistorySamplesAt.load())
@@ -600,8 +609,8 @@ void SpectrumDifference::peakHolder(int index, float& magLin, floatMatrix &histo
         int fftSize = fftSizeAt.load();
         for (auto i = 0; i < fftSize; i++)
         {
-            historyValues1.push_back (std::vector<float> (numOfHistorySamples, 0));
-            historyValues2.push_back (std::vector<float> (numOfHistorySamples, 0));
+            historyValues1.push_back (std::vector<float> (numOfHistorySamples, 1.0f));
+            historyValues2.push_back (std::vector<float> (numOfHistorySamples, 1.0f));
         }
     }
         
@@ -620,17 +629,17 @@ void SpectrumDifference::peakHolder(int index, float& magLin, floatMatrix &histo
     
     magLin = averageValue;
 }
+
 void SpectrumDifference::resized() {}
+
 void SpectrumDifference::createNewAxis()
 {
-    axisImage = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
+    axisImage = Image(Image::PixelFormat::RGB, getWidth(), getHeight(), true);
     Graphics g (axisImage);
     
     int height = getHeight();
     int width  = getWidth();
     
-    g.setColour (Colour (0xff0f0f1c));
-    g.fillRoundedRectangle(0, 0, getWidth(), getHeight(), 8.0f);
     g.setColour(Colour (0xff42a2c8));
     g.drawHorizontalLine(getHeight(), 0, getWidth());
     g.drawHorizontalLine(getHeight() - 1, 0, getWidth());
@@ -688,23 +697,28 @@ void SpectrumDifference::createNewAxis()
                     case 4: fo = "0"; break; case 5: fo = "-3"; break; case 6: fo = "-6"; break;
                     case 7: fo = "-9"; break; case 8: fo = ""; break;
                 }
+                Colour numberColour;
+                if (i == 1 || i == 2 || i == 3 ) numberColour = Colours::palegreen;
+                if (i == 4 ) numberColour = Colours::white;
+                if (i == 5 || i == 6 || i == 7 ) numberColour = Colours::palevioletred;
+                
                 if (i == 4)
                 {
                     g.setColour(Colours::white);
                     g.setOpacity(0.6);
                     g.drawHorizontalLine(height*(i / 8.000000), 30, (float)width - 10);
-                    g.setColour(Colours::white);
-                    g.setFont(10);
-                    g.drawText((String)fo, 5, i*(height / 8.000000) - 10, 50, 20, juce::Justification::left, true);
+                    g.setColour(numberColour);
+                    g.setFont(11.f);
+                    g.drawText((String)fo, 10, i*(height / 8.000000) - 10, 50, 20, juce::Justification::left, true);
                 }
                 else
                 {
                     g.setColour(Colours::grey);
                     g.setOpacity(0.3);
                     g.drawHorizontalLine(height*(i / 8.000000), 30, (float)width - 10);
-                    g.setColour(Colours::white);
-                    g.setFont(10);
-                    g.drawText((String)fo, 5, i*(height / 8.000000) - 10, 50, 20, juce::Justification::left, true);
+                    g.setColour(numberColour);
+                    g.setFont(11.f);
+                    g.drawText((String)fo, 10, i*(height / 8.000000) - 10, 50, 20, juce::Justification::left, true);
                 }
                 
             }
@@ -719,23 +733,29 @@ void SpectrumDifference::createNewAxis()
                     case 4: fo = "0"; break; case 5: fo = "-9"; break; case 6: fo = "-18"; break;
                     case 7: fo = "-27"; break; case 8: fo = ""; break;
                 }
+                
+                Colour numberColour;
+                if (i == 1 || i == 2 || i == 3 ) numberColour = Colours::palegreen;
+                if (i == 4 ) numberColour = Colours::white;
+                if (i == 5 || i == 6 || i == 7 ) numberColour = Colours::palevioletred;
+
                 if (i == 4)
                 {
                     g.setColour(Colours::white);
                     g.setOpacity(0.6);
                     g.drawHorizontalLine(height*(i / 8.000000), 30, (float)width - 10);
-                    g.setColour(Colours::white);
-                    g.setFont(10);
-                    g.drawText((String)fo, 5, i*(height / 8.000000) - 10, 50, 20, juce::Justification::left, true);
+                    g.setColour(numberColour);
+                    g.setFont(11.f);
+                    g.drawText((String)fo, 10, i*(height / 8.000000) - 10, 50, 20, juce::Justification::left, true);
                 }
                 else
                 {
                     g.setColour(Colours::grey);
                     g.setOpacity(0.3);
                     g.drawHorizontalLine(height*(i / 8.000000), 30, (float)width - 10);
-                    g.setColour(Colours::white);
-                    g.setFont(10);
-                    g.drawText((String)fo, 5, i*(height / 8.000000) - 10, 50, 20, juce::Justification::left, true);
+                    g.setColour(numberColour);
+                    g.setFont(11.f);
+                    g.drawText((String)fo, 10, i*(height / 8.000000) - 10, 50, 20, juce::Justification::left, true);
                 }
             }
             break;
@@ -750,23 +770,28 @@ void SpectrumDifference::createNewAxis()
                     case 7: fo = "-54"; break; case 8: fo = ""; break;
                 }
                 
+                Colour numberColour;
+                if (i == 1 || i == 2 || i == 3 ) numberColour = Colours::palegreen;
+                if (i == 4 ) numberColour = Colours::white;
+                if (i == 5 || i == 6 || i == 7 ) numberColour = Colours::palevioletred;
+
                 if (i == 4)
                 {
                     g.setColour(Colours::white);
                     g.setOpacity(0.6);
                     g.drawHorizontalLine(height*(i / 8.000000), 30, (float)width - 10);
-                    g.setColour(Colours::white);
-                    g.setFont(10);
-                    g.drawText((String)fo, 5, i*(height / 8.000000) - 10, 50, 20, juce::Justification::left, true);
+                    g.setColour(numberColour);
+                    g.setFont(11.f);
+                    g.drawText((String)fo, 10, i*(height / 8.000000) - 10, 50, 20, juce::Justification::left, true);
                 }
                 else
                 {
                     g.setColour(Colours::grey);
                     g.setOpacity(0.3);
                     g.drawHorizontalLine(height*(i / 8.000000), 30, (float)width - 10);
-                    g.setColour(Colours::white);
-                    g.setFont(10);
-                    g.drawText((String)fo, 5, i*(height / 8.000000) - 10, 50, 20, juce::Justification::left, true);
+                    g.setColour(numberColour);
+                    g.setFont(11.f);
+                    g.drawText((String)fo, 10, i*(height / 8.000000) - 10, 50, 20, juce::Justification::left, true);
                 }
             }
             break;
@@ -780,53 +805,55 @@ void SpectrumDifference::createNewAxis()
                     case 4: fo = "0"; break; case 5: fo = "-30"; break; case 6: fo = "-60"; break;
                     case 7: fo = "-90"; break; case 8: fo = ""; break;
                 }
-                
+                Colour numberColour;
+                if (i == 1 || i == 2 || i == 3 ) numberColour = Colours::palegreen;
+                if (i == 4 ) numberColour = Colours::white;
+                if (i == 5 || i == 6 || i == 7 ) numberColour = Colours::palevioletred;
+
                 if (i == 4)
                 {
                     g.setColour(Colours::white);
                     g.setOpacity(0.6);
                     g.drawHorizontalLine(height*(i / 8.000000), 30, (float)width - 10);
-                    g.setColour(Colours::white);
-                    g.setFont(10);
-                    g.drawText((String)fo, 5, i*(height / 8.000000) - 10, 50, 20, juce::Justification::left, true);
+                    g.setColour(numberColour);
+                    g.setFont(11.f);
+                    g.drawText((String)fo, 10, i*(height / 8.000000) - 10, 50, 20, juce::Justification::left, true);
                 }
                 else
                 {
                     g.setColour(Colours::grey);
                     g.setOpacity(0.3);
                     g.drawHorizontalLine(height*(i / 8.000000), 30, (float)width - 10);
-                    g.setColour(Colours::white);
-                    g.setFont(10);
-                    g.drawText((String)fo, 5, i*(height / 8.000000) - 10, 50, 20, juce::Justification::left, true);
+                    g.setColour(numberColour);
+                    g.setFont(11.f);
+                    g.drawText((String)fo, 10, i*(height / 8.000000) - 10, 50, 20, juce::Justification::left, true);
                 }
             }
             break;
     }
+    shadeWindow = Image(Image::PixelFormat::RGB, getWidth(), getHeight(), true);
+    Graphics g2 (shadeWindow);
+    for (int i = 0; i < 20; i++)
+    {
+        float opacity = (float(i) + 30) / 50;
+        g2.setColour(Colours::black.withAlpha(isPositiveAndBelow(1 - opacity, 1) ? 1 - opacity : 0.f));
+        g2.drawVerticalLine   (width - i, 0, height);
+        g2.drawHorizontalLine (i, 0, width);
+        g2.drawHorizontalLine (height - i, 0, width);
+    }
+    for (int i = 0; i < 50; i++)
+    {
+        float opacity = (float(i) + 20) / 50.f;
+        g2.setColour(Colours::black.withAlpha(isPositiveAndBelow(1 - opacity, 1) ? 1 - opacity : 0.f));
+        g2.drawVerticalLine(i, 0, height);
+    }
+
     axisNeedsUpdate.store(false);
 }
-void SpectrumDifference::createShadeWindow()
-{
-    shadeWindow = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
-    Graphics g (shadeWindow);
-    
-    int height = getHeight();
-    int width  = getWidth();
-    
-//    for (auto i = 0; i < 10; ++i)
-//    {
-//        float opacity = ((10 - i) / 10.f) * 0.5f;
-//        g.setColour (Colour(Colours::black));
-//        g.setOpacity(opacity);
-//        g.drawHorizontalLine(i, 0, width);
-//        g.drawHorizontalLine(height - i, 0, width);
-//    }
-    
-    g.setColour(Colour (0xff42a2c8));
-    g.drawHorizontalLine (height, 0, getWidth());
-    g.drawHorizontalLine (height - 1, 0, getWidth());
-}
+
 
 //==============================================================================
+// PHASE DIFFERENCE
 PhaseDifference::PhaseDifference(int sR, int fS, int nC, AudioBufferManagement& buffManag, forwardFFT& fFFT)
 :
     analyseMode(1),
@@ -837,9 +864,9 @@ PhaseDifference::PhaseDifference(int sR, int fS, int nC, AudioBufferManagement& 
     setTopLeftPosition(9,668); //7, 263
     setSize (710, 116); // 714,281
     setVisible(true);
-    toFront(true);
-    setOpaque(false);
-    
+    setPaintingIsUnclipped(true);
+    setOpaque(true);
+
     conversionTable.    clear();
     linGainData1.       clear();
     linGainData2.       clear();
@@ -853,15 +880,14 @@ PhaseDifference::PhaseDifference(int sR, int fS, int nC, AudioBufferManagement& 
     numOfHistorySamples = numOfHistorySamplesAt.load();
     
     createNewAxis();
-    createShadeWindow();
     
     // Init. the data & indexes Vectors
     for (auto i = 0; i < fftSize; i++)
     {
         linGainData1. push_back(0);
         linGainData2. push_back(0);
-        historyValues1.push_back (std::vector<float> (numOfHistorySamples, 0));
-        historyValues2.push_back (std::vector<float> (numOfHistorySamples, 0));
+        historyValues1.push_back (std::vector<float> (numOfHistorySamples, 0.f));
+        historyValues2.push_back (std::vector<float> (numOfHistorySamples, 0.f));
     }
     
     for (auto i = 0; i < getWidth(); i++)
@@ -886,25 +912,24 @@ PhaseDifference::PhaseDifference(int sR, int fS, int nC, AudioBufferManagement& 
         conversionTable.push_back(convTab);
     }
 }
+
 PhaseDifference::~PhaseDifference()
 {
 }
+
 void PhaseDifference::paint (Graphics& g)
 {
-//    std::lock_guard<std::mutex> lock (m);
     createFrame();
     g.drawImage (mainFrame, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
 }
+
 void PhaseDifference::createFrame()
 {
-    std::unique_lock<std::mutex> lock (m, std::try_to_lock);
-    if(!lock.owns_lock())
-        return;
-
-    mainFrame = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
+    mainFrame = Image(Image::PixelFormat::RGB, getWidth(), getHeight(), true);
     Graphics g (mainFrame);
     
-    g.drawImage (axisImage, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
+    g.setColour (Colour (0xff0f0f1c));
+    g.fillRoundedRectangle(0, 0, getWidth(), getHeight(), 8.0f);
     
     processAllFftData (mainAudioBufferSystem.bufferPre, mainAudioBufferSystem.bufferPost, linGainData1, linGainData2 );
     
@@ -946,8 +971,9 @@ void PhaseDifference::createFrame()
     }
     
     g.drawImage (shadeWindow, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
-    --mainAudioBufferSystem.visualizersSemaphore;
+    g.drawImage (axisImage, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
 }
+
 void PhaseDifference::createPath ( std::vector<double>& magnitudeDBmono, Path &drawPath)
 {
 
@@ -969,6 +995,7 @@ void PhaseDifference::createPath ( std::vector<double>& magnitudeDBmono, Path &d
     }
     drawPath.lineTo(getWidth(), getHeight()/2.f);
 }
+
 void PhaseDifference::processAllFftData (audioBufferManagementType& bufferPre, audioBufferManagementType& bufferPost, std::vector<double>& linGain1, std::vector<double>& linGain2 )
 {
     linGain1.clear();
@@ -1183,6 +1210,7 @@ void PhaseDifference::processAllFftData (audioBufferManagementType& bufferPre, a
         }
     }
 }
+
 void PhaseDifference::peakHolder(int index, float& magLin, floatMatrix &historySamples)
 {
     if (numOfHistorySamples != numOfHistorySamplesAt.load())
@@ -1213,17 +1241,16 @@ void PhaseDifference::peakHolder(int index, float& magLin, floatMatrix &historyS
     
     magLin = averageValue;
 }
+
 void PhaseDifference::resized() {}
+
 void PhaseDifference::createNewAxis()
 {
-    axisImage = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
+    axisImage = Image(Image::PixelFormat::RGB, getWidth(), getHeight(), true);
     Graphics g (axisImage);
     
     int height = getHeight();
     int width  = getWidth();
-    
-    g.setColour (Colour (0xff0f0f1c));
-    g.fillRoundedRectangle(0, 0, getWidth(), getHeight(), 8.0f);
     
     float sampleRate = sampleRateAt.load();
 
@@ -1272,7 +1299,7 @@ void PhaseDifference::createNewAxis()
     {
         String fo;
         switch (i){
-            case 0: fo = "180"; break; case 1: fo = "90"; break;
+            case 0: fo = "+""180"; break; case 1: fo = "+""90"; break;
             case 2: fo = "0"; break;   case 3: fo = "-""90"; break;
             case 4: fo = "-""180"; break;
         }
@@ -1280,14 +1307,18 @@ void PhaseDifference::createNewAxis()
         g.setColour(Colours::lightgrey);
         g.setOpacity(0.3);
         g.drawHorizontalLine(height*(i / 4.000000), 30, (float)width - 10);
-        g.setColour(Colours::white);
-        g.setFont(10);
+        
+        if (i == 0 || i == 1 ) g.setColour(Colours::palegreen);
+        if (i == 2 )           g.setColour(Colours::white);
+        if (i == 3 || i == 4 ) g.setColour(Colours::palevioletred);
+        
+        g.setFont(11.f);
         if (i == 0 || i == 4){
             if (i == 0){
-                g.drawText((String)fo, 5, i*(height / 4.000000), 50, 20, juce::Justification::left, true);
+                g.drawText((String)fo, 10, i*(height / 4.000000), 50, 20, juce::Justification::left, true);
             }
             if (i == 4){
-                g.drawText((String)fo, 5, i*(height / 4.000000) - 20, 50, 20, juce::Justification::left, true);
+                g.drawText((String)fo, 10, i*(height / 4.000000) - 20, 50, 20, juce::Justification::left, true);
             }
         }
         if (i == 2){
@@ -1296,54 +1327,51 @@ void PhaseDifference::createNewAxis()
             g.drawHorizontalLine(height*(i / 4.000000), 30, (float)width - 10);
             g.setColour(Colours::white);
             g.setOpacity(1.0f);
-            g.drawText((String)fo, 5, i*(height / 4.000000) - 10, 50, 20, juce::Justification::left, true);
+            g.drawText((String)fo, 10, i*(height / 4.000000) - 10, 50, 20, juce::Justification::left, true);
         }
         
         if( i== 1 || i == 3 ){
-            g.drawText((String)fo, 5, i*(height / 4.000000) - 10, 50, 20, juce::Justification::left, true);
-            
+            g.drawText((String)fo, 10, i*(height / 4.000000) - 10, 50, 20, juce::Justification::left, true);
         }
     }
-}
-void PhaseDifference::createShadeWindow()
-{
-    shadeWindow = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
-    Graphics g (shadeWindow);
     
-    int height = getHeight();
-    int width  = getWidth();
+    shadeWindow = Image(Image::PixelFormat::RGB, getWidth(), getHeight(), true);
+    Graphics g2 (shadeWindow);
+    for (int i = 0; i < 20; i++)
+    {
+        float opacity = (float(i) + 30) / 50;
+        g2.setColour(Colours::black.withAlpha(isPositiveAndBelow(1 - opacity, 1) ? 1 - opacity : 0.f));
+        g2.drawVerticalLine   (width - i, 0, height);
+        g2.drawHorizontalLine (i, 0, width);
+        g2.drawHorizontalLine (height - i, 0, width);
+    }
+    for (int i = 0; i < 50; i++)
+    {
+        float opacity = (float(i) + 20) / 50.f;
+        g2.setColour(Colours::black.withAlpha(isPositiveAndBelow(1 - opacity, 1) ? 1 - opacity : 0.f));
+        g2.drawVerticalLine(i, 0, height);
+    }
 
-//    for (auto i = 0; i < 10; ++i)
-//    {
-//        float opacity = ((10 - i) / 10.f) * 0.5f;
-//        g.setColour (Colour(Colours::black));
-//        g.setOpacity(opacity);
-//        g.drawHorizontalLine(i, 0, width);
-//        g.drawHorizontalLine(height - i, 0, width);
-//    }
-    
-    g.setColour(Colour (0xff42a2c8));
-    g.drawHorizontalLine(0, 0, getWidth());
-    g.drawHorizontalLine(1, 0, getWidth());
-    
 }
+
 
 //==============================================================================
-StereoAnalyser::StereoAnalyser(int sR, int bS, int nS, int z, AudioBufferManagement& buffManag, forwardFFT& fFFT)
+// STEREO ANALYSER
+StereoAnalyser::StereoAnalyser(int sR, int bS, AudioBufferManagement& buffManag, forwardFFT& fFFT)
 :
 blockSizeAt(bS),
 sampleRateAt(sR),
-numOfHistorySamplesAt(nS),
-zoomAt(z),
+numOfHistorySamplesAt(20),
+zoomAt(200),
 mainAudioBufferSystem(buffManag),
 forwFFT(fFFT)
 {
     setTopLeftPosition(729, 89); //7, 263
     setSize (346, 346); // 714,281
     setVisible(true);
-    toFront(true);
-    setOpaque(false);
-    
+    setPaintingIsUnclipped(true);
+    setOpaque(true);
+
     energyPre  = {0, 0};
     energyPost = {0, 0};
     meanValuePre  = 0;
@@ -1352,43 +1380,40 @@ forwFFT(fFFT)
     
     createNewAxis();
     createCorrelationBackground();
-    //createShadeWindow();
 }
+
 StereoAnalyser::~StereoAnalyser()
 {
 }
+
 void StereoAnalyser::paint (Graphics& g)
 {
-//    std::lock_guard<std::mutex> lock (m);
     createFrame();
     g.drawImage (mainFrame, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
 }
+
 void StereoAnalyser::createFrame()
 {
-    std::unique_lock<std::mutex> lock (m, std::try_to_lock);
-    if(!lock.owns_lock())
-        return;
-
-    mainFrame = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
-    Graphics g (mainFrame);
-
     processAllFftData ();
-    
     createCurbes();
+
+    mainFrame = Image(Image::PixelFormat::RGB, getWidth(), getHeight(), true);
+    Graphics g (mainFrame);
+    
     g.drawImage (axisImage, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
     g.drawImage (lissajouCurbe, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
+    g.drawImage (shadeWindow, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
     g.drawImage (correlationBackground, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
     g.drawImage (correlationLines, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
-    
-    --mainAudioBufferSystem.visualizersSemaphore;
 }
+
 void StereoAnalyser::createCurbes ()
 {
     int sizeOfQueue = setOfPointsHistDataPre.size();
     int blockSize = blockSizeAt.load();
     float zoom = zoomAt.load();
     
-    lissajouCurbe = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
+    lissajouCurbe = Image(Image::PixelFormat::RGB, getWidth(), getHeight(), true);
     Image::BitmapData bitMap (lissajouCurbe, Image::BitmapData::readWrite);
 
     Colour colPre  = Colours::lightgrey;
@@ -1396,6 +1421,7 @@ void StereoAnalyser::createCurbes ()
     for (auto index = sizeOfQueue - 1 ; index >= 0; --index)
     {
         int opacity = (float(count) / (float(sizeOfQueue) + index)) * 255;
+        if (sizeOfQueue == 1) opacity = 1.0f;
         for (auto i = 0; i < blockSize; ++i)
         {
             int X = (getWidth() / 2) - (setOfPointsHistDataPre[index][i].first  * zoom);
@@ -1411,6 +1437,7 @@ void StereoAnalyser::createCurbes ()
     for (auto index = sizeOfQueue - 1 ; index >= 0; --index)
     {
         int opacity = (float(count) / (float(sizeOfQueue) + index)) * 255;
+        if (sizeOfQueue == 1) opacity = 1.0f;
         for (auto i = 0; i < blockSize; ++i)
         {
             int X = (getWidth() / 2) - (setOfPointsHistDataPost[index][i].first  * zoom);
@@ -1421,7 +1448,7 @@ void StereoAnalyser::createCurbes ()
         count++;
     }
     
-    correlationLines = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
+    correlationLines = Image(Image::PixelFormat::RGB, getWidth(), getHeight(), true);
     Image::BitmapData bitMap2 (correlationLines, Image::BitmapData::readWrite);
     Colour colCorr;
 
@@ -1458,6 +1485,7 @@ void StereoAnalyser::createCurbes ()
         bitMap2.setPixelColour ( (getHeight()/2.0f) - corrRest + 1, rectAnchor + 2*rectHeight + y + 21, colCorrRest.brighter());
     }
 }
+
 void StereoAnalyser::processAllFftData ()
 {
     const int blockSize = blockSizeAt.load();
@@ -1544,9 +1572,9 @@ void StereoAnalyser::processAllFftData ()
         }
     }
     
-    if ( setOfPointsHistDataPre.size() == numOfHistorySamples )  setOfPointsHistDataPre.pop_back();
+    while (setOfPointsHistDataPre.size() >= numOfHistorySamples) setOfPointsHistDataPre.pop_back();
     setOfPointsHistDataPre.push_front(setOfXYpointsPre);
-    if ( setOfPointsHistDataPost.size() == numOfHistorySamples ) setOfPointsHistDataPost.pop_back();
+    while (setOfPointsHistDataPost.size() >= numOfHistorySamples) setOfPointsHistDataPost.pop_back();
     setOfPointsHistDataPost.push_front(setOfXYpointsPost);
      
     float corrPre  = (meanValuePre  / float(corrRMSWindowLength)) / std::sqrt((energyPre.first / float(corrRMSWindowLength))  * (energyPre.second / float(corrRMSWindowLength)));
@@ -1561,10 +1589,12 @@ void StereoAnalyser::processAllFftData ()
     //if ( setOfCorrelationHistData.size() == numOfHistorySamples )
     setOfCorrelationHistData = {corrPre, corrPost, corrRest};
 }
+
 void StereoAnalyser::resized() {}
+
 void StereoAnalyser::createNewAxis()
 {
-    axisImage = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
+    axisImage = Image(Image::PixelFormat::RGB, getWidth(), getHeight(), true);
     Graphics g (axisImage);
     
     int height = getHeight();
@@ -1579,10 +1609,23 @@ void StereoAnalyser::createNewAxis()
     g.drawLine(0, 0, width, height);
     g.drawLine(0, height/2, width, height/2);
     g.drawLine(width/2, 0, width/2, height);
+    
+    shadeWindow = Image(Image::PixelFormat::RGB, getWidth(), getHeight(), true);
+    Graphics g2 (shadeWindow);
+    for (int i = 0; i < 20; i++)
+    {
+        float opacity = (float(i) + 30) / 50;
+        g2.setColour(Colours::black.withAlpha(isPositiveAndBelow(1 - opacity, 1) ? 1 - opacity : 0.f));
+        g2.drawVerticalLine   (i, 0, height);
+        g2.drawVerticalLine   (width - i, 0, height);
+        g2.drawHorizontalLine (i, 0, width);
+        g2.drawHorizontalLine (height - i, 0, width);
+    }
 }
+
 void StereoAnalyser::createCorrelationBackground()
 {
-    correlationBackground = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
+    correlationBackground = Image(Image::PixelFormat::RGB, getWidth(), getHeight(), true);
     Graphics g (correlationBackground);
     
     int height = getHeight();
@@ -1593,185 +1636,519 @@ void StereoAnalyser::createCorrelationBackground()
     int X = 15;
     int Y = height - (15 + rectHeight);
     
-    g.setColour  (Colour (0xff42a2c8));
-    g.setOpacity (1.f);
-    g.drawRoundedRectangle(X, Y, rectWidth, rectHeight + 5, 2.f, 3.f);
-    
     g.setColour  (Colours::black);
     g.setOpacity (0.8f);
-    g.fillRoundedRectangle(X + 1, Y + 1, width - 30 - 2, height*0.22f - 2 + 5, 2.f);
+    g.fillRoundedRectangle(X, Y, rectWidth, rectHeight + 4, 5.f);
+
+    g.setColour  (Colour (0xff42a2c8).withSaturation(0.85f));
+    g.setOpacity (1.f);
+    g.drawRoundedRectangle(X, Y, rectWidth, rectHeight + 4, 5.f, 1.7f);
     
-    g.setColour(Colour (0xff42a2c8));
+    g.setColour(Colour (0xff42a2c8).withMultipliedSaturation(0.65f));
     g.setOpacity(1.f);
-    g.drawRoundedRectangle( X + 10, Y + 5, rectWidth - 20, (rectHeight / 3) - 5, 2.f, 2.f);
-    g.drawRoundedRectangle( X + 10, Y + 10 + ((rectHeight / 3) - 5), rectWidth - 20, (rectHeight / 3) - 5, 2.f, 2.f);
-    g.drawRoundedRectangle( X + 10, Y + 15 + (2 * ((rectHeight / 3) - 5)), rectWidth - 20, (rectHeight / 3) - 5, 2.f, 2.f);
+    g.drawRoundedRectangle( X + 8, Y + 5, rectWidth - 20 + 2, (rectHeight / 3) - 5, 1.5f, 1.5f);
+    g.drawRoundedRectangle( X + 8, Y + 10 + ((rectHeight / 3) - 5), rectWidth - 20 + 2, (rectHeight / 3) - 5, 1.5f, 1.5f);
+    g.drawRoundedRectangle( X + 8, Y + 15 + (2 * ((rectHeight / 3) - 5)), rectWidth - 20 + 2, (rectHeight / 3) - 5, 1.5f, 1.5f);
 }
 
+
 //==============================================================================
-WaveformAnalyser::WaveformAnalyser(int sR, int bS, int mode, float cP, float bpm, AudioBufferManagement& buffManag)
+// WAVEFORM ANALYSER
+WaveformAnalyser::WaveformAnalyser(int sR, int bS, AudioBufferManagement& buffManag)
 :
 blockSizeAt(bS),
 sampleRateAt(sR),
-modeAt(mode),
-hostBpmAt(bpm),
-currentPositionAt(cP),
+modeAt(3),
+rangeAt(1),
+gainAt(1.0f),
+axisNeedsUpdate(true),
 mainAudioBufferSystem(buffManag)
 {
     setTopLeftPosition(9, 89); //7, 263
     setSize (710, 166); // 714,281
     setVisible(true);
-    toFront(true);
-    setOpaque(false);
+    setPaintingIsUnclipped(true);
+    setOpaque(true);
     
-    rmsWindowLength = sR * 0.8f;
-    newMaxValueInPixel  = std::vector<float> ( getWidth(), 0.f);
+    rmsWindowLength = sR * 0.4f;
+    historyBufferPre   = std::vector<float> ( getWidth(), getHeight());
+    historyBufferPost  = std::vector<float> ( getWidth(), getHeight());
+    historyBufferMinMaxPre = std::vector<Range<float>> ( getWidth(), Range<float>(getHeight() / 2, getHeight() / 2));
+    historyBufferMinMaxPost = std::vector<Range<float>> ( getWidth(), Range<float>(getHeight() / 2, getHeight() / 2));
+    rmsGainBuffer  = std::vector<float> ( getWidth(), getHeight() / 2);
+
+    rmsGainPath.preallocateSpace(7 + getWidth());
     
-    oldIndexPosition = 0;
     createNewAxis();
 }
+
 WaveformAnalyser::~WaveformAnalyser()
 {
 }
+
 void WaveformAnalyser::paint (Graphics& g)
 {
-//    std::lock_guard<std::mutex> lock (m);
     createFrame();
-    g.drawImage (mainFrame, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
+    g.drawImage (waveformImage, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
+    if (axisNeedsUpdate.load()) createNewAxis();
+    g.drawImage (axisImage, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
 }
+
 void WaveformAnalyser::createFrame()
 {
-    std::unique_lock<std::mutex> lock (m, std::try_to_lock);
-    if(!lock.owns_lock())
-        return;
-
-    mainFrame = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
-    Graphics g (mainFrame);
-
-    createWaveform();
+    processData();
     
-    g.drawImage (axisImage, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
-    g.drawImage (waveformImage, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
+    const int width = getWidth();
+    const int height = getHeight();
     
-    --mainAudioBufferSystem.visualizersSemaphore;
+    waveformImage = Image(Image::PixelFormat::RGB, getWidth(), getHeight(), true);
+    Graphics g (waveformImage);
+    
+    g.setColour (Colour (0xff0f0f1c));
+    g.fillRoundedRectangle(0, 0, getWidth(), getHeight(), 8.0f);
+    
+    g.setColour  (Colours::lightgrey);
+    g.setOpacity (0.3f);
+    int x1 = 0;
+    for (Range<float> valuesInPixel : historyBufferMinMaxPre)
+    {
+        g.drawVerticalLine(x1, valuesInPixel.getStart(), height / 2);
+        g.drawVerticalLine(x1, height / 2, valuesInPixel.getEnd() );
+        ++x1;
+    }
+    
+    g.setColour  (Colours::whitesmoke);
+    g.setOpacity (0.85f);
+    int x2 = 0;
+    for (Range<float> valuesInPixel : historyBufferMinMaxPost)
+    {
+        g.drawVerticalLine(x2, valuesInPixel.getStart(), height / 2);
+        g.drawVerticalLine(x2, height / 2, valuesInPixel.getEnd() );
+        ++x2;
+    }
+    
+    rmsGainPath.clear();
+    rmsGainPath.startNewSubPath(0, height / 2);
+    int x3 = 0;
+    for (float valueInPixel : rmsGainBuffer)
+    {
+        rmsGainPath.lineTo (x3, valueInPixel);
+        ++x3;
+    }
+    rmsGainPath.lineTo(width, height / 2);
+    
+    g.setColour  (Colour (0xff42a2c8));
+    g.setOpacity (1.0f);
+    g.strokePath (rmsGainPath, PathStrokeType (2.f, PathStrokeType::beveled));
 }
-void WaveformAnalyser::createCurbes ()
-{
-    
-}
-void WaveformAnalyser::createWaveform ()
+
+void WaveformAnalyser::processData()
 {
     const int width = getWidth();
     const int height = getHeight();
     const int sampleRate = sampleRateAt.load();
-    const int mode = modeAt.load();
     const int numOfChannels = mainAudioBufferSystem.bufferPre.historyBuffer.getNumChannels();
-    const int newIndexPosition = mainAudioBufferSystem.bufferPre.getLastIndexPositionInHistoryBuffer();
-    const int numOfSamplesInHistoryBuffer = mainAudioBufferSystem.bufferPre.historyBuffer.getNumSamples();
+    
+    const float gain = gainAt.load();
+    
+    const int mode = modeAt.load();
+    int modeDurationSeconds;
+    switch (mode)
+    {
+        case 1: modeDurationSeconds = 1; break;
+        case 2: modeDurationSeconds = 4; break;
+        case 3: modeDurationSeconds = 8; break;
+        default: modeDurationSeconds = 8; break;
+    }
+    
+    const int range = rangeAt.load();
+    int rmsGainCurbeRange;
+    switch (range)
+    {
+        case 1: rmsGainCurbeRange = 12; break;
+        case 2: rmsGainCurbeRange = 24; break;
+        case 3: rmsGainCurbeRange = 36; break;
+        default: modeDurationSeconds = 12; break;
+    }
 
-    int numOfSamplesInTimeMode = sampleRate * mode; // 44100 * 2 88200 samples ( 2s of audio )
+    
+    int numOfSamplesInTimeMode = sampleRate * modeDurationSeconds; // 44100 * 2 88200 samples ( 2s of audio )
     int numOfSamplesPerPixel = numOfSamplesInTimeMode / width; // ~ 125 samples / pixel
-//    int numOfNewSamples = newIndexPosition - oldIndexPosition;
     
     int numOfNewSamples = sampleRate * ( 43 / 1000.f );
-    if (numOfNewSamples < 0) numOfNewSamples = ( numOfSamplesInHistoryBuffer - oldIndexPosition ) + newIndexPosition;
     int numOfNewPixelValues = std::ceil(numOfNewSamples / (float)numOfSamplesPerPixel);
     
-    numOfNewPixelsToPaint = numOfNewPixelValues;
-
     AudioBuffer<float> audioBlockPre (2, numOfNewPixelValues * numOfSamplesPerPixel );
     audioBlockPre.clear();
     mainAudioBufferSystem.bufferPre.copySamplesFromHistoryBuffer(audioBlockPre, numOfNewSamples);
     
-    FloatVectorOperations::copy (&newMaxValueInPixel[0], &newMaxValueInPixel[numOfNewPixelValues], width - numOfNewPixelValues);
+    AudioBuffer<float> audioBlockPost (2, numOfNewPixelValues * numOfSamplesPerPixel );
+    audioBlockPost.clear();
+    mainAudioBufferSystem.bufferPost.copySamplesFromHistoryBuffer(audioBlockPost, numOfNewSamples);
+    
+    FloatVectorOperations::copy (&rmsGainBuffer[0], &rmsGainBuffer[numOfNewPixelValues], width - numOfNewPixelValues);
+    
+    for (int i = 0; i < width - numOfNewPixelValues; i++)
+    {
+        historyBufferMinMaxPre[i]   = historyBufferMinMaxPre  [i + numOfNewPixelValues];
+        historyBufferMinMaxPost[i]  = historyBufferMinMaxPost [i + numOfNewPixelValues];
+    }
+    
     for (auto i = 0; i < numOfNewPixelValues; ++i)
     {
         int index = i * numOfSamplesPerPixel;
-        AudioBuffer<float> sampleGroup (2, numOfSamplesPerPixel);
+        AudioBuffer<float> sampleGroupPre  (2, numOfSamplesPerPixel);
+        AudioBuffer<float> sampleGroupPost (2, numOfSamplesPerPixel);
+        
         for (auto ch = 0; ch < numOfChannels ; ++ch)
         {
-            sampleGroup.copyFrom (ch, 0, audioBlockPre, ch, index, numOfSamplesPerPixel);
+            sampleGroupPre  .copyFrom (ch, 0, audioBlockPre,  ch, index, numOfSamplesPerPixel);
+            sampleGroupPost .copyFrom (ch, 0, audioBlockPost, ch, index, numOfSamplesPerPixel);
         }
-        FloatVectorOperations::add (sampleGroup.getWritePointer(0), sampleGroup.getReadPointer(1), numOfSamplesPerPixel);
-        float maxInSampleGroup = FloatVectorOperations::findMaximum (sampleGroup.getReadPointer(0), numOfSamplesPerPixel);
-
-        float newPixelValue = height - (maxInSampleGroup * height);
-        if (! isPositiveAndBelow (newPixelValue, height))
+        FloatVectorOperations::add (sampleGroupPre.getWritePointer(0), sampleGroupPre.getReadPointer(1), numOfSamplesPerPixel);
+        FloatVectorOperations::add (sampleGroupPost.getWritePointer(0), sampleGroupPost.getReadPointer(1), numOfSamplesPerPixel);
+        
+        Range<float> maxMinSampleGroupPre   = FloatVectorOperations::findMinAndMax (sampleGroupPre.getReadPointer(0),  numOfSamplesPerPixel);
+        Range<float> maxMinSampleGroupPost  = FloatVectorOperations::findMinAndMax (sampleGroupPost.getReadPointer(0), numOfSamplesPerPixel);
+        
+        float newStartPre = ( (height / 2) - ( maxMinSampleGroupPre.getEnd() * (height / 2) * gain));
+        float newEndPre = ( (height / 2) - ( maxMinSampleGroupPre.getStart() * (height / 2) * gain));
+        float newStartPost = ( (height / 2) - ( maxMinSampleGroupPost.getEnd() * (height / 2) * gain));
+        float newEndPost = ( (height / 2) - ( maxMinSampleGroupPost.getStart() * (height / 2) * gain));
+        
+        maxMinSampleGroupPre = Range<float> (newStartPre, newEndPre);
+        maxMinSampleGroupPost = Range<float> (newStartPost, newEndPost);
+        maxMinSampleGroupPre  .getIntersectionWith (Range<float>(0, height));
+        maxMinSampleGroupPost .getIntersectionWith (Range<float>(0, height));
+        
+        historyBufferMinMaxPre  [ width - i - 1 ] = maxMinSampleGroupPre;
+        historyBufferMinMaxPost [ width - i - 1 ] = maxMinSampleGroupPost;
+        
+        float rmsInBufferPre   = mainAudioBufferSystem.bufferPre  .getRMSMonoValueInSample(index, rmsWindowLength);
+        float rmsInBufferPost  = mainAudioBufferSystem.bufferPost .getRMSMonoValueInSample(index, rmsWindowLength);
+        
+        double linGain = double(rmsInBufferPost) / double(rmsInBufferPre) ;
+        if (isinf(linGain)) linGain = 0;
+        double gainLog = 20 * log10 (linGain);
+        double rmsValuePixel = ( gainLog / rmsGainCurbeRange ) * ( height / 2.f );
+        rmsValuePixel = ( height / 2.f) - rmsValuePixel;
+        if (! isPositiveAndBelow (rmsValuePixel, height))
         {
-            if ( newPixelValue < 0 ) newPixelValue = 0;
-            else                     newPixelValue = height - 1;
+            if ( rmsValuePixel < 0 ) rmsValuePixel = 0;
+            else                     rmsValuePixel = height - 1;
         }
-        std::memcpy (&newMaxValueInPixel [width - numOfNewPixelValues + i], &newPixelValue, sizeof(float));
+        rmsGainBuffer [width - i - 1] = rmsValuePixel;
     }
-    
-//    for (int i = 0; i < 5; ++i)
-//    {
-//        counter++;
-//        float newPixelValue = (counter / 200.f) * height;
-//        std::memcpy (&newMaxValueInPixel [width - 5 + i], &newPixelValue, sizeof(float));
-//        if (counter >= 200) counter = 0;
-//    }
-    
-    waveformImage = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
-    Graphics g (waveformImage);
-    
-//    g.setOpacity (1.0f);
-//    if (numOfNewPixelValues == 12 )
-//    {
-//        g.setColour  (Colours::red);
-//        g.fillRect(0, 0, width, 40);
-//    }
-//    else if (numOfNewPixelValues == 6)
-//    {
-//        g.setColour  (Colours::yellow);
-//        g.fillRect(0, 0, width, 40);
-//    }
-//    else if (numOfNewPixelValues == 3)
-//    {
-//        g.setColour  (Colours::green);
-//        g.fillRect(0, 0, width, 40);
-//    }
-
-    Path waveformPath;
-    waveformPath.startNewSubPath(0, height);
-    g.setOpacity(1.0f);
-    g.setColour(Colours::whitesmoke);
-    int x = 0;
-    for (float valueInPixel : newMaxValueInPixel)
-    {
-//        waveformPath.lineTo (x, valueInPixel);
-        g.drawVerticalLine (x, valueInPixel, height);
-        ++x;
-    }
-//    waveformPath.lineTo(width, height);
-//    waveformPath.closeSubPath();
-//    oldIndexPosition = newIndexPosition;
-//
-//    g.setColour  (Colours::whitesmoke);
-//    g.setOpacity (1.0f);
-//    g.strokePath (waveformPath, PathStrokeType (1.7f, PathStrokeType::beveled));
-//
-//    g.setColour  (Colours::whitesmoke.darker());
-//    g.setOpacity (1.0f);
-//    g.fillPath (waveformPath);
 }
 
-void WaveformAnalyser::processAllFftData () {}
 void WaveformAnalyser::resized() {}
+
 void WaveformAnalyser::createNewAxis()
 {
-    axisImage = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
+    axisImage = Image(Image::PixelFormat::RGB, getWidth(), getHeight(), true);
     Graphics g (axisImage);
+    int height = getHeight();
+    int width = getWidth();
+    int horitzCenter = height / 2;
     
-    g.setColour (Colour (0xff0f0f1c));
-    g.fillRoundedRectangle(0, 0, getWidth(), getHeight(), 8.0f);
+    for (int i = 0; i < 50; i++)
+    {
+        float opacity = (float(i) + 20) / 50.f;
+        g.setColour(Colours::black);
+        g.setOpacity(isPositiveAndBelow(1 - opacity, 1) ? 1 - opacity : 0.f);
+        g.drawVerticalLine(i, 0, height);
+    }
+    
+    const int range = rangeAt.load();
+    int rmsGainCurbeRange;
+    int slope;
+    switch (range)
+    {
+        case 1: rmsGainCurbeRange = 12; slope = 3;  break;
+        case 2: rmsGainCurbeRange = 24; slope = 6;  break;
+        case 3: rmsGainCurbeRange = 36; slope = 9;  break;
+        default: rmsGainCurbeRange = 12; slope = 3; break;
+    }
+    for (int i = rmsGainCurbeRange - slope; i >= -(rmsGainCurbeRange - slope) ; i = i - slope)
+    {
+        float linedB = (height / 2) - ( i / float(rmsGainCurbeRange) ) * horitzCenter;
+        g.setColour(Colours::grey);
+        g.setOpacity(0.3);
+        g.drawHorizontalLine (linedB, 30, width);
+        g.setFont(11.f);
+        if (i > 0 )
+        {
+            g.setColour(Colours::palegreen);
+            g.drawText ("+" + String(i), 10, linedB - 10, 50, 20, Justification::left, true);
+        }
+        else if ( i == 0)
+        {
+            g.setColour(Colours::white);
+            g.drawText (String(i), 10, linedB - 10, 50, 20, Justification::left, true);
+        }
+        else
+        {
+            g.setColour(Colours::palevioletred);
+            g.drawText (String(i), 10, linedB - 10, 50, 20, Justification::left, true);
+        }
+    }
+    
+    axisNeedsUpdate.store(false);
 }
 
 
+//==============================================================================
+// LEVEL METER
+LevelMeter::LevelMeter(int sR, int bS, AudioBufferManagement& buffManag)
+:
+blockSizeAt(bS),
+sampleRateAt(sR),
+mainAudioBufferSystem(buffManag)
+{
+    setTopLeftPosition(1085, 89); //7, 263
+    setSize (186, 696); // 714,281
+    setVisible(true);
+    setPaintingIsUnclipped(true);
+    setOpaque(true);
+    
+    rmsWindowLength = sR * 0.4f;
+    createNewAxis();
+}
 
+LevelMeter::~LevelMeter()
+{
+}
 
+void LevelMeter::paint (Graphics& g)
+{
+    createFrame();
+    g.drawImage (waveformImage, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
+    g.drawImage (axisImage, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
+}
 
+void LevelMeter::createFrame()
+{
+    processData();
+    const int width = getWidth();
+    const int height = getHeight();
+    
+    waveformImage = Image(Image::PixelFormat::RGB, width, height, true);
+    Graphics g (waveformImage);
+    
+    g.setColour (Colour (0xff0f0f1c));
+    g.fillRoundedRectangle(0, 0, width, height, 8.0f);
+    
+    float maxRangeAbsolute = 60.0f;
+    float topPartOffset = 10.f;
+    float size0dB = height - topPartOffset;
+    float numPixPerDb = size0dB / maxRangeAbsolute;
+    float size0dBDiff = (27.0f * numPixPerDb) + topPartOffset;
+    float finalPixelValue, rmsLevel, rmsLevelNorm;
 
+    // LEFT CHANNEL FINAL LEVEL (PEAK & RMS)
+    rmsLevel = 20 * log10 (setOfValuesToPaint.peakLevelPost.first ) + 3.f;
+    rmsLevelNorm =  abs(rmsLevel) / maxRangeAbsolute; // ~-1 , ~0
+    finalPixelValue = topPartOffset + ( rmsLevelNorm * size0dB );
+    
+    g.setColour(Colours::whitesmoke.darker());
+    g.fillRect (Rectangle<float>::leftTopRightBottom (60.f, finalPixelValue, (width/2.f) - 1.0f , height));
 
+    rmsLevel = 20 * log10 (setOfValuesToPaint.rmsLevelPost.first) + 3.f;
+    rmsLevelNorm =  abs(rmsLevel) / maxRangeAbsolute; // ~-1 , ~0
+    finalPixelValue = topPartOffset + ( rmsLevelNorm * size0dB );
+    
+    g.setColour(Colours::whitesmoke);
+    g.fillRect (Rectangle<float>::leftTopRightBottom (60.f, finalPixelValue, (width/2.f) - 1.0f, height));
+    
+    // RIGHT CHANNEL FINAL LEVEL (PEAK & RMS)
+    rmsLevel = 20 * log10 (setOfValuesToPaint.peakLevelPost.second ) + 3.f;
+    rmsLevelNorm =  abs(rmsLevel) / maxRangeAbsolute; // ~-1 , ~0
+    finalPixelValue = topPartOffset + ( rmsLevelNorm * size0dB );
+    
+    g.setColour(Colours::whitesmoke.darker());
+    g.fillRect (Rectangle<float>::leftTopRightBottom ((width/2.f) + 1.0f, finalPixelValue, width - 60.0f , height));
+    
+    rmsLevel = 20 * log10 (setOfValuesToPaint.rmsLevelPost.second) + 3.f;
+    rmsLevelNorm =  abs(rmsLevel) / maxRangeAbsolute; // ~-1 , ~0
+    finalPixelValue = topPartOffset + ( rmsLevelNorm * size0dB );
+    
+    g.setColour(Colours::whitesmoke);
+    g.fillRect (Rectangle<float>::leftTopRightBottom ((width/2.f) + 1.0f, finalPixelValue, width - 60.0f, height));
+    
+    // LEFT CHANNEL DIFFERENCE LEVEL (PEAK & RMS)
+    rmsLevel = 20 * log10 (setOfValuesToPaint.peakLevelDifference.first );
+    finalPixelValue = size0dBDiff - (rmsLevel * numPixPerDb);
+
+    rmsLevel > 0 ?
+        g.setColour(Colours::palegreen.darker()) :
+        g.setColour(Colours::palevioletred.darker());
+    rmsLevel > 0 ?
+        g.fillRect (Rectangle<float>::leftTopRightBottom (33.f, finalPixelValue, 39.f , size0dBDiff)) :
+        g.fillRect (Rectangle<float>::leftTopRightBottom (33.f, size0dBDiff, 39.f , finalPixelValue));
+
+    rmsLevel = 20 * log10 (setOfValuesToPaint.rmsLevelDifference.first);
+    finalPixelValue = size0dBDiff - (rmsLevel * numPixPerDb);
+
+    rmsLevel > 0 ?
+        g.setColour(Colours::palegreen) :
+        g.setColour(Colours::palevioletred);
+    rmsLevel > 0 ?
+        g.fillRect (Rectangle<float>::leftTopRightBottom (40.f, finalPixelValue, 60.0f - 2.0f , size0dBDiff)) :
+        g.fillRect (Rectangle<float>::leftTopRightBottom (40.f, size0dBDiff, 60.0f - 2.0f , finalPixelValue));
+
+    // RIGHT CHANNEL DIFFERENCE LEVEL (PEAK & RMS)
+    rmsLevel = 20 * log10 (setOfValuesToPaint.peakLevelDifference.second );
+    finalPixelValue = size0dBDiff - (rmsLevel * numPixPerDb);
+
+    rmsLevel > 0 ?
+        g.setColour(Colours::palegreen.darker()) :
+        g.setColour(Colours::palevioletred.darker());
+    rmsLevel > 0 ?
+        g.fillRect (Rectangle<float>::leftTopRightBottom (width - 40.f + 1, finalPixelValue, width - 40.f + 7.f , size0dBDiff)) :
+        g.fillRect (Rectangle<float>::leftTopRightBottom (width - 40.f + 1, size0dBDiff, width - 40.f + 7.f , finalPixelValue));
+
+    rmsLevel = 20 * log10 (setOfValuesToPaint.rmsLevelDifference.second );
+    finalPixelValue = size0dBDiff - (rmsLevel * numPixPerDb);
+
+    rmsLevel > 0 ?
+        g.setColour(Colours::palegreen) :
+        g.setColour(Colours::palevioletred);
+    rmsLevel > 0 ?
+        g.fillRect (Rectangle<float>::leftTopRightBottom (width - 60.0f + 2.f, finalPixelValue, width - 40.f , size0dBDiff)) :
+        g.fillRect (Rectangle<float>::leftTopRightBottom (width - 60.0f + 2.f, size0dBDiff, width - 40.f , finalPixelValue));
+
+}
+
+void LevelMeter::processData()
+{
+    const int sampleRate = sampleRateAt.load();
+    
+    int numOfNewSamples = sampleRate * ( 43 / 1000.f );
+    
+    // RMS computing on both pre and post signals
+    setOfValuesToPaint.rmsLevelPost.first   = mainAudioBufferSystem.bufferPost.getRMSChannelValueInSample(0, rmsWindowLength, 0);
+    setOfValuesToPaint.rmsLevelPost.second  = mainAudioBufferSystem.bufferPost.getRMSChannelValueInSample(0, rmsWindowLength, 1);
+
+    // RMS gain computing
+    setOfValuesToPaint.rmsLevelDifference.first
+        = setOfValuesToPaint.rmsLevelPost.first  / mainAudioBufferSystem.bufferPre.getRMSChannelValueInSample(0, rmsWindowLength, 0);
+    setOfValuesToPaint.rmsLevelDifference.second
+        = setOfValuesToPaint.rmsLevelPost.second / mainAudioBufferSystem.bufferPre.getRMSChannelValueInSample(0, rmsWindowLength, 1);
+    
+    // Peak computing for both pre and post signals
+    AudioBuffer<float> audioBlockPre (2, numOfNewSamples );
+    audioBlockPre.clear();
+    mainAudioBufferSystem.bufferPre.copySamplesFromHistoryBuffer(audioBlockPre, numOfNewSamples);
+    
+    AudioBuffer<float> audioBlockPost (2, numOfNewSamples );
+    audioBlockPost.clear();
+    mainAudioBufferSystem.bufferPost.copySamplesFromHistoryBuffer(audioBlockPost, numOfNewSamples);
+    
+    Range<float> maxMinChannel1Post = audioBlockPost.findMinMax(0, 0, numOfNewSamples);
+    Range<float> maxMinChannel2Post = audioBlockPost.findMinMax(1, 0, numOfNewSamples);
+    Range<float> maxMinChannel1Pre  = audioBlockPre.findMinMax(0, 0, numOfNewSamples);
+    Range<float> maxMinChannel2Pre  = audioBlockPre.findMinMax(1, 0, numOfNewSamples);
+
+    float absMaxChannel1Post = abs(maxMinChannel1Post.getEnd()) > abs(maxMinChannel1Post.getStart()) ?
+        abs(maxMinChannel1Post.getEnd()) :  abs(maxMinChannel1Post.getStart());
+    float absMaxChannel2Post = abs(maxMinChannel2Post.getEnd()) > abs(maxMinChannel2Post.getStart()) ?
+        abs(maxMinChannel2Post.getEnd()) :  abs(maxMinChannel2Post.getStart());
+    float absMaxChannel1Pre = abs(maxMinChannel1Pre.getEnd()) > abs(maxMinChannel1Pre.getStart()) ?
+        abs(maxMinChannel1Pre.getEnd()) :  abs(maxMinChannel1Pre.getStart());
+    float absMaxChannel2Pre = abs(maxMinChannel2Pre.getEnd()) > abs(maxMinChannel2Pre.getStart()) ?
+        abs(maxMinChannel2Pre.getEnd()) :  abs(maxMinChannel2Pre.getStart());
+    
+    // Peak gain computing
+    float differenceChannel1 = absMaxChannel1Post / absMaxChannel1Pre;
+    float differenceChannel2 = absMaxChannel2Post / absMaxChannel2Pre;
+
+    // RMS gain peak holder computing
+    setOfValuesToPaint.peakLevelPost.first   = absMaxChannel1Post > setOfValuesToPaint.oldPeakLevelPost.first ?
+        absMaxChannel1Post : setOfValuesToPaint.oldPeakLevelPost.first;
+    setOfValuesToPaint.peakLevelPost.second  = absMaxChannel2Post > setOfValuesToPaint.oldPeakLevelPost.second ?
+    absMaxChannel2Post : setOfValuesToPaint.oldPeakLevelPost.second;
+    
+    setOfValuesToPaint.oldPeakLevelPost.first   = setOfValuesToPaint.peakLevelPost.first   * 0.90f;
+    setOfValuesToPaint.oldPeakLevelPost.second  = setOfValuesToPaint.peakLevelPost.second  * 0.90f;
+    
+    // Peak gain peak holder computing
+//    setOfValuesToPaint.oldPeakLevelDifference.first   = differenceChannel1 > setOfValuesToPaint.oldPeakLevelDifference.first ?
+//        differenceChannel1 : setOfValuesToPaint.oldPeakLevelDifference.first;
+//    setOfValuesToPaint.oldPeakLevelDifference.second  = differenceChannel2 > setOfValuesToPaint.oldPeakLevelDifference.second ?
+//        differenceChannel2 : setOfValuesToPaint.oldPeakLevelDifference.second;
+//
+//    setOfValuesToPaint.oldPeakLevelDifference.first   = setOfValuesToPaint.oldPeakLevelDifference.first   * 0.90f;
+//    setOfValuesToPaint.oldPeakLevelDifference.second  = setOfValuesToPaint.oldPeakLevelDifference.second  * 0.90f;
+    
+    setOfValuesToPaint.peakLevelDifference.first   = differenceChannel1;
+    setOfValuesToPaint.peakLevelDifference.second  = differenceChannel2;
+}
+
+void LevelMeter::resized() {}
+
+void LevelMeter::createNewAxis()
+{
+    axisImage = Image(Image::PixelFormat::RGB, getWidth(), getHeight(), true);
+    Graphics g (axisImage);
+    int height = getHeight();
+    int width = getWidth();
+    int horitzCenter = (height - 10.f) / 2.f;
+    int topPartOffset = 10;
+    float maxRangeAbsolute = 60.f;
+    float numPixPerDb = float(height - topPartOffset) / maxRangeAbsolute;
+//
+    int gainLabelNumber = 27;
+    for (int i = 0; i <= 54; i += 9)
+    {
+        // LINES
+        g.setColour(Colours::dimgrey);
+        if (i == 27)
+        {
+            g.setColour(Colours::lightgrey);
+            g.fillRect (30.f, topPartOffset + float(numPixPerDb * i), width - 60.f, 2.f);
+        }
+        else g.drawHorizontalLine (topPartOffset + (numPixPerDb * i), 30, width - 30);
+        
+        // LEVEL LABELS
+        String numToDraw;
+        if (i == 0) numToDraw = "+0";
+        else numToDraw = "-" + String(i);
+        g.setColour(Colours::white);
+        g.setFont(11.f);
+        g.drawText( numToDraw, 10, topPartOffset + (numPixPerDb * i) - 5, 50, 20, Justification::topLeft, true);
+        g.drawText( numToDraw, width - 24, topPartOffset + (numPixPerDb * i) - 5, 50, 20, Justification::topLeft, true);
+        
+        // GAIN LABELS
+        String gainToDraw;
+        if (i < 27)
+        {
+            g.setColour(Colours::palegreen);
+            gainToDraw = "+" + String(gainLabelNumber);
+            g.drawText( gainToDraw, 10, topPartOffset + (numPixPerDb * i) + 10, 50, 20, Justification::topLeft, true);
+            g.drawText( gainToDraw, width - 24, topPartOffset + (numPixPerDb * i) + 10, 50, 20, Justification::topLeft, true);
+        }
+        if (i > 27)
+        {
+            g.setColour(Colours::palevioletred);
+            gainToDraw = String(gainLabelNumber);
+            g.drawText( gainToDraw, 10, topPartOffset + (numPixPerDb * i) + 10, 50, 20, Justification::topLeft, true);
+            g.drawText( gainToDraw, width - 24, topPartOffset + (numPixPerDb * i) + 10, 50, 20, Justification::topLeft, true);
+        }
+        gainLabelNumber -= 9;
+    }
+    
+    for (int i = 0; i <= 60; i += 3)
+    {
+        // SEMI LINES
+        g.setColour(Colours::dimgrey);
+        if ( i % 9 != 0)
+        {
+            g.drawHorizontalLine (topPartOffset + (numPixPerDb * i), 10, 25);
+            g.drawHorizontalLine (topPartOffset + (numPixPerDb * i), width - 25, width - 10);
+        }
+    }
+
+    
+}
 
 

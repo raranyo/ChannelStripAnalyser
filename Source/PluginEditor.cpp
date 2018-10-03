@@ -6,7 +6,7 @@ class ChannelStripAnalyserAudioProcessorEditor::PluginListWindow   : public Docu
 {
 public:
     PluginListWindow(ChannelStripAnalyserAudioProcessorEditor& owner)
-    : DocumentWindow("Available Plugins", Colours::darkseagreen
+    : DocumentWindow("Available Plugins", Colour (0xff111111)
                      ,DocumentWindow::closeButton
                      ),
     owner(owner)
@@ -18,7 +18,7 @@ public:
                                                                           getFile().getSiblingFile("RecentlyCrashedPluginsList")));
         
         
-        this->setTitleBarButtonsRequired(4, true);
+        setTitleBarButtonsRequired(4, true);
         
         savedPluginList = owner.processor.applicationProperties.getUserSettings()->getXmlValue("pluginList");
         
@@ -36,8 +36,6 @@ public:
         auto y = owner.processor.applicationProperties.getUserSettings()->getIntValue("lastPositionY", 100);
         
         setTopLeftPosition(x, y);
-        
-        
     }
     
     ~PluginListWindow()
@@ -99,7 +97,7 @@ ChannelStripAnalyserAudioProcessorEditor::ChannelStripAnalyserAudioProcessorEdit
         mainAudioBufferSystem (bufSys),
         forwFFT (fftSize, processor. getTotalNumInputChannels())
 {
-    
+    myOpenGLContext.attachTo(*this);
     addUiElements();
     setOpaque (true);
     setSize (1280, 791);
@@ -115,9 +113,11 @@ ChannelStripAnalyserAudioProcessorEditor::ChannelStripAnalyserAudioProcessorEdit
     addAndMakeVisible
         ( phaseDifference   = new PhaseDifference    (sampleRate, fftSize, numOfChannels, mainAudioBufferSystem, forwFFT));
     addAndMakeVisible
-        (stereoAnalyser     = new StereoAnalyser     (sampleRate, fftSize, 15, 200, mainAudioBufferSystem, forwFFT));
+        (stereoAnalyser     = new StereoAnalyser     (sampleRate, fftSize, mainAudioBufferSystem, forwFFT));
     addAndMakeVisible
-        (waveformAnalyser   = new WaveformAnalyser   (sampleRate, fftSize, 8, 0, 120, mainAudioBufferSystem));
+        (waveformAnalyser   = new WaveformAnalyser   (sampleRate, fftSize, mainAudioBufferSystem));
+    addAndMakeVisible
+        (levelMeter         = new LevelMeter         (sampleRate, fftSize, mainAudioBufferSystem));
     
     createParametersAttachments();
     
@@ -130,47 +130,45 @@ ChannelStripAnalyserAudioProcessorEditor::ChannelStripAnalyserAudioProcessorEdit
         editors.add(nullptr);
     }
     
-    Timer::startTimer(50);
-    diffcount.store(0);
-//    HighResolutionTimer::startTimer(43);
+    triggerAsyncUpdate();
+    Timer::startTimer(100);
 }
 
 ChannelStripAnalyserAudioProcessorEditor::~ChannelStripAnalyserAudioProcessorEditor()
 {
+    Timer::stopTimer();
     HighResolutionTimer::stopTimer();
 }
 
 void ChannelStripAnalyserAudioProcessorEditor::hiResTimerCallback()
 {
-//    cancelPendingUpdate();
     mainAudioBufferSystem.pushAudioBufferIntoHistoryBuffer();
+    
+    if (isUpdatePending()) cancelPendingUpdate();
     triggerAsyncUpdate();
-    ++diffcount;
-
 }
+
 void ChannelStripAnalyserAudioProcessorEditor::handleAsyncUpdate()
 {
-//    spectrumAnalyser   -> createFrame();
-//    spectrumDifference -> createFrame();
-//    phaseDifference    -> createFrame();
-//    stereoAnalyser     -> createFrame();
-//    waveformAnalyser   -> createFrame();
-    --diffcount;
-//    spectrumAnalyser   -> repaint();
-//    spectrumDifference -> repaint();
-//    phaseDifference    -> repaint();
-//    stereoAnalyser     -> repaint();
+    if ( ! HighResolutionTimer::isTimerRunning())
+        HighResolutionTimer::startTimer(43);
+    
+    spectrumAnalyser   -> repaint();
+    spectrumDifference -> repaint();
+    phaseDifference    -> repaint();
+    stereoAnalyser     -> repaint();
     waveformAnalyser   -> repaint();
+    levelMeter         -> repaint();
+    
+    String processorDelay   = (String) ( processor.graph.getLatencySamples() );
+    textEditorTotalDelay -> setText(processorDelay);
 }
 
 void ChannelStripAnalyserAudioProcessorEditor::timerCallback()
 {
-    if ( ! HighResolutionTimer::isTimerRunning())
-        HighResolutionTimer::startTimer(43);
     // checking flag states for plugin deletion, creation and re-creation
-    for(auto i=0; i<6; i++)
+    for(auto i = 0; i < 6; i++)
     {
-
         if (processor.deletedPlugins[i]) // plugin is flagged for deletion
         {
             processor.deletePluginProcessor(i+1);
@@ -187,29 +185,9 @@ void ChannelStripAnalyserAudioProcessorEditor::timerCallback()
             if (editors[i] != nullptr) processor.recalledPlugins[i] = false;
 
         }
-        if (processor.plugIns[i]) processor.shownPlugins[i] = editors[i]->isVisible();
-
+        if (processor.plugIns[i])
+            if (editors[i] != nullptr) processor.shownPlugins[i] = editors[i]->isVisible();
     }
-//    --diffcount;
-//    spectrumAnalyser   -> repaint();
-//    spectrumDifference -> repaint();
-//    phaseDifference    -> repaint();
-//    stereoAnalyser     -> repaint();
-//    waveformAnalyser   -> repaint();
-
-    // needs to block audioThread in order to get last delay in graph data
-    // processor.graph.prepareToPlay (processor.asampleRate.load(), processor.ablockSize.load());
-    String totalDelay   = (String) ( processor.graph.getLatencySamples());
-    float position = processor.currentPosition.ppqPosition;
-    float rest = std::fmod(position, 4);
-    String playPosition = (String) ( rest );
-    String numOfNewPixels   = (String) ( waveformAnalyser->numOfNewPixelsToPaint);
-    String diffCount   = (String) ( diffcount.load());
-    textEditorTotalDelay -> setText(diffCount);
-    //repaintVisualizers();
-    
-    
-
 }
 
 PluginDescription* ChannelStripAnalyserAudioProcessorEditor::getChosenType(const int menuID) const
@@ -281,12 +259,70 @@ void ChannelStripAnalyserAudioProcessorEditor::deletePlugin(int i)
     
     
 }
-//==============================================================================
+
+void ChannelStripAnalyserAudioProcessorEditor::fftSizeChanged() 
+{
+    cancelPendingUpdate();
+    if (HighResolutionTimer::isTimerRunning())
+        HighResolutionTimer::stopTimer();
+
+    const int numOfChannels = processor.getTotalNumInputChannels();
+    const int sampleRate = processor.getSampleRate();
+
+    switch (fftSizeButton->getSelectedId())
+    {
+        case 1:
+            forwFFT.changeFFTSize(1024);
+            fftSize = 1024;
+            spectrumAnalyser.reset   ( new SpectrumAnalyser   (sampleRate, fftSize, numOfChannels, mainAudioBufferSystem, forwFFT));
+            spectrumDifference.reset ( new SpectrumDifference (sampleRate, fftSize, numOfChannels, mainAudioBufferSystem, forwFFT));
+            phaseDifference.reset    ( new PhaseDifference    (sampleRate, fftSize, numOfChannels, mainAudioBufferSystem, forwFFT));
+            break;
+            
+        case 2:
+            forwFFT.changeFFTSize(2048);
+            fftSize = 2048;
+            spectrumAnalyser.reset   ( new SpectrumAnalyser   (sampleRate, fftSize, numOfChannels, mainAudioBufferSystem, forwFFT));
+            spectrumDifference.reset ( new SpectrumDifference (sampleRate, fftSize, numOfChannels, mainAudioBufferSystem, forwFFT));
+            phaseDifference.reset    ( new PhaseDifference    (sampleRate, fftSize, numOfChannels, mainAudioBufferSystem, forwFFT));
+            break;
+            
+        case 3:
+            forwFFT.changeFFTSize(4096);
+            fftSize = 4096;
+            spectrumAnalyser.reset   ( new SpectrumAnalyser   (sampleRate, fftSize, numOfChannels, mainAudioBufferSystem, forwFFT));
+            spectrumDifference.reset ( new SpectrumDifference (sampleRate, fftSize, numOfChannels, mainAudioBufferSystem, forwFFT));
+            phaseDifference.reset    ( new PhaseDifference    (sampleRate, fftSize, numOfChannels, mainAudioBufferSystem, forwFFT));
+            break;
+    }
+    
+    addAndMakeVisible(spectrumAnalyser);
+    addAndMakeVisible(spectrumDifference);
+    addAndMakeVisible(phaseDifference);
+    
+    sliderValueChanged(&sliderSpectrumAnalyserRange);
+    sliderValueChanged(&sliderSpectrumAnalyserReturnTime);
+
+    sliderValueChanged(&sliderSpectrumDifferenceRange);
+    sliderValueChanged(&sliderSpectrumDifferenceTimeAverage);
+
+
+    if ( ! HighResolutionTimer::isTimerRunning())
+        HighResolutionTimer::startTimer(43);
+
+}
+
+
 //==============================================================================
 void ChannelStripAnalyserAudioProcessorEditor::paint (Graphics& g)
 {
     g.drawImage (backgroundImage, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
     //repaintVisualizers();
+}
+
+void ChannelStripAnalyserAudioProcessorEditor::paintOverChildren (Graphics& g)
+{
+    g.drawImage (foregroundImage, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
 }
 
 void ChannelStripAnalyserAudioProcessorEditor::createBackgroundUi()
@@ -296,163 +332,180 @@ void ChannelStripAnalyserAudioProcessorEditor::createBackgroundUi()
     
     g.fillAll (Colour (0x11111111));
     {
+        // BACKGROUND
         int x = 0, y = 0, width = 1280, height = 792;
         Colour fillColour = Colour (0xff111111);
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
         g.setColour (fillColour);
         g.fillRect (x, y, width, height);
     }
+    {
+        float x = 727.0f, y = 443.0f, width = 350.0f, height = 343.0f;
+        Colour fillColour = Colour (0xff0f0f1c);
+        g.setColour (fillColour);
+        g.fillRoundedRectangle (x, y, width, height, 10.000f);
+    }
+    
+    {
+        float x = 727.0f, y = 443.0f, width = 350.0f, height = 343.0f;
+        Colour strokeColour = Colour (0xff42a2c8);
+        g.setColour (strokeColour);
+        g.drawRoundedRectangle (x, y, width, height, 10.000f, 4.000f);
+    }
+    
+    {
+        float x = 7.0f, y = 5.0f, width = 1267.0f, height = 76.0f;
+        Colour fillColour = Colour (0xff0f0f1c);
+        g.setColour (fillColour);
+        g.fillRoundedRectangle (x, y, width, height, 10.000f);
+    }
+    
+    {
+        float x = 7.0f, y = 5.0f, width = 1267.0f, height = 76.0f;
+        Colour strokeColour = Colour (0xff42a2c8);
+        g.setColour (strokeColour);
+        g.drawRoundedRectangle (x, y, width, height, 10.000f, 4.000f);
+    }
+    {
+        float x = 735.0f, y = 451.0f, width = 165.0f, height = 100.0f;
+        Colour strokeColour = Colour (0xff42a2c8).withMultipliedSaturation(0.65);
+        g.setColour (strokeColour);
+        g.drawRoundedRectangle (x, y, width, height, 5.000f, 1.500f);
+    }
+    {
+        float x = 905.0f, y = 451.0f, width = 164.0f, height = 100.0f;
+        Colour strokeColour = Colour (0xff42a2c8).withMultipliedSaturation(0.65);
+        g.setColour (strokeColour);
+        g.drawRoundedRectangle (x, y, width, height, 5.000f, 1.500f);
+    }
+    {
+        float x = 735.0f, y = 556.0f, width = 334.0f, height = 140.0f;
+        Colour strokeColour = Colour (0xff42a2c8).withMultipliedSaturation(0.65);
+        g.setColour (strokeColour);
+        g.drawRoundedRectangle (x, y, width, height, 5.000f, 1.500f);
+    }
+    {
+        float x = 735.0f, y = 701.0f, width = 334.0f, height = 78.0f;
+        Colour strokeColour = Colour (0xff42a2c8).withMultipliedSaturation(0.65);
+        g.setColour (strokeColour);
+        g.drawRoundedRectangle (x, y, width, height, 5.000f, 1.500f);
+    }
+
+    {
+        float x = 735.0f, y = 451.0f, width = 165.0f, height = 100.0f;
+        Colour strokeColour = Colour (0xff42a2c8).withAlpha(0.03f);
+        g.setColour (strokeColour);
+        g.fillRoundedRectangle (x, y, width, height, 5.000f);
+    }
+    {
+        float x = 905.0f, y = 451.0f, width = 164.0f, height = 100.0f;
+        Colour strokeColour = Colour (0xff42a2c8).withAlpha(0.03f);
+        g.setColour (strokeColour);
+        g.fillRoundedRectangle (x, y, width, height, 5.000f);
+    }
+    {
+        float x = 735.0f, y = 556.0f, width = 334.0f, height = 140.0f;
+        Colour strokeColour = Colour (0xff42a2c8).withAlpha(0.03f);
+        g.setColour (strokeColour);
+        g.fillRoundedRectangle (x, y, width, height, 5.000f);
+    }
+    {
+        float x = 735.0f, y = 701.0f, width = 334.0f, height = 78.0f;
+        Colour strokeColour = Colour (0xff42a2c8).withAlpha(0.03f);
+        g.setColour (strokeColour);
+        g.fillRoundedRectangle (x, y, width, height, 5.000f);
+    }
+
+
+    //[UserPaint] Add your own custom painting code here..
+    foregroundImage = Image(Image::PixelFormat::ARGB, getWidth(), getHeight(), true);
+    Graphics g2 (foregroundImage);
     
     {
         // WAVEFORM
         float x = 7.0f, y = 87.0f, width = 714.0f, height = 170.0f;
         Colour strokeColour = Colour (0xff42a2c8);
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArgum ents]
-        g.setColour (strokeColour);
-        g.drawRoundedRectangle (x, y, width, height, 10.000f, 4.000f);
+        g2.setColour (strokeColour);
+        g2.drawRoundedRectangle (x, y, width, height, 10.000f, 4.000f);
     }
     
     {
         // SPECTRUM ANALYSER
         float x = 7.0f, y = 263.0f, width = 714.0f, height = 281.0f;
         Colour strokeColour = Colour (0xff42a2c8);
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (strokeColour);
-        g.drawRoundedRectangle (x, y, width, height, 10.000f, 4.000f);
+        g2.setColour (strokeColour);
+        g2.drawRoundedRectangle (x, y, width, height, 10.000f, 4.000f);
     }
     
     {
         // SPECTRUM DIFF / PHASE
         float x = 7.0f, y = 550.0f, width = 714.0f, height = 236.0f;
         Colour strokeColour = Colour (0xff42a2c8);
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (strokeColour);
-        g.drawRoundedRectangle (x, y, width, height, 10.000f, 4.000f);
+        g2.setColour (strokeColour);
+        g2.drawRoundedRectangle (x, y, width, height, 10.000f, 4.000f);
     }
     
     {
         // STEREO VIEW
         float x = 727.0f, y = 87.0f, width = 350.0f, height = 350.0f;
         Colour strokeColour = Colour (0xff42a2c8);
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (strokeColour);
-        g.drawRoundedRectangle (x, y, width, height, 10.000f, 4.000f);
+        g2.setColour (strokeColour);
+        g2.drawRoundedRectangle (x, y, width, height, 10.000f, 4.000f);
     }
-    
     {
+        // LEVEL METER
         float x = 1083.0f, y = 87.0f, width = 190.0f, height = 700.0f;
         Colour strokeColour = Colour (0xff42a2c8);
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (strokeColour);
-        g.drawRoundedRectangle (x, y, width, height, 10.000f, 4.000f);
+        g2.setColour (strokeColour);
+        g2.drawRoundedRectangle (x, y, width, height, 10.000f, 4.000f);
     }
-    
     {
-        float x = 727.0f, y = 443.0f, width = 350.0f, height = 343.0f;
-        Colour fillColour = Colour (0xff0f0f1c);
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.fillRoundedRectangle (x, y, width, height, 10.000f);
-    }
-    
-    {
-        float x = 727.0f, y = 443.0f, width = 350.0f, height = 343.0f;
         Colour strokeColour = Colour (0xff42a2c8);
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (strokeColour);
-        g.drawRoundedRectangle (x, y, width, height, 10.000f, 4.000f);
+        g2.setColour(strokeColour);
+        g2.fillRect (7.0f, 667.0f, 714.0f, 2.000f);
     }
-    
-    {
-        float x = 7.0f, y = 5.0f, width = 1267.0f, height = 76.0f;
-        Colour fillColour = Colour (0xff0f0f1c);
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.fillRoundedRectangle (x, y, width, height, 10.000f);
-    }
-    
-    {
-        float x = 7.0f, y = 5.0f, width = 1267.0f, height = 76.0f;
-        Colour strokeColour = Colour (0xff42a2c8);
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (strokeColour);
-        g.drawRoundedRectangle (x, y, width, height, 10.000f, 4.000f);
-    }
-    
-    //[UserPaint] Add your own custom painting code here..
-    g.setColour (Colours::white);
-    g.setFont (55.0f);
-    
 }
 
 void ChannelStripAnalyserAudioProcessorEditor::resized()
 {
-    //[UserPreResize] Add your own custom resize code here..
-    //[/UserPreResize]
-    
-    //[UserResized] Add your own custom resize handling here..
-    //[/UserResized]
 }
 
 void ChannelStripAnalyserAudioProcessorEditor::sliderValueChanged (Slider* sliderThatWasMoved)
 {
     //[UsersliderValueChanged_Pre]
     //==============================================================================
-    if (sliderThatWasMoved == &sliderRangeVectorscope)
-    {
-        //[UserSliderCode_sliderRangeVectorscope] -- add your slider handling code here..
-        //[/UserSliderCode_sliderRangeVectorscope]
-    }
-    else if (sliderThatWasMoved == &sliderVanishTime)
-    {
-        //[UserSliderCode_sliderVanishTime] -- add your slider handling code here..
-        //[/UserSliderCode_sliderVanishTime]
-    }
-    else if (sliderThatWasMoved == &sliderCurbeOffset)
+    if (sliderThatWasMoved == &sliderWaveformRange)
     {
         //[UserSliderCode_sliderCurbeOffset] -- add your slider handling code here..
+        waveformAnalyser -> rangeAt.store((int) sliderWaveformRange.getValue());
+        waveformAnalyser -> axisNeedsUpdate.store(true);
         //[/UserSliderCode_sliderCurbeOffset]
     }
-    else if (sliderThatWasMoved == &sliderDifferenceGain)
+    else if (sliderThatWasMoved == &sliderWaveformGain)
     {
         //[UserSliderCode_sliderDifferenceGain] -- add your slider handling code here..
+        waveformAnalyser -> gainAt.store( sliderWaveformGain.getValue());
         //[/UserSliderCode_sliderDifferenceGain]
     }
-    else if (sliderThatWasMoved == &sliderRMSWindow)
+    else if (sliderThatWasMoved == &sliderVectorscopeRange)
     {
-        //[UserSliderCode_sliderRMSWindow] -- add your slider handling code here..
-        //[/UserSliderCode_sliderRMSWindow]
+        //[UserSliderCode_sliderRangeVectorscope] -- add your slider handling code here..
+        stereoAnalyser -> zoomAt.store( sliderVectorscopeRange.getValue());
+        //[/UserSliderCode_sliderRangeVectorscope]
     }
-    else if (sliderThatWasMoved == &sliderZoomX)
+    else if (sliderThatWasMoved == &sliderVectorscopeVanishTime)
     {
-        //[UserSliderCode_sliderZoomX] -- add your slider handling code here..
-        //[/UserSliderCode_sliderZoomX]
+        //[UserSliderCode_sliderVanishTime] -- add your slider handling code here..
+        stereoAnalyser -> numOfHistorySamplesAt.store( sliderVectorscopeVanishTime.getValue());
+        //[/UserSliderCode_sliderVanishTime]
     }
-    else if (sliderThatWasMoved == &sliderZoomY)
+    else if (sliderThatWasMoved == &sliderSpectrumAnalyserRange)
     {
-        //[UserSliderCode_sliderZoomY] -- add your slider handling code here..
-        //[/UserSliderCode_sliderZoomY]
-    }
-    
-    //==============================================================================
-    else if (sliderThatWasMoved == &sliderRangeSpectrumAnalyser)
-    {
-        spectrumAnalyser -> scaleModeAt.store((int) sliderRangeSpectrumAnalyser.getValue());
+        spectrumAnalyser -> scaleModeAt.store((int) sliderSpectrumAnalyserRange.getValue());
         spectrumAnalyser -> axisNeedsUpdate.store(true);
     }
-    else if (sliderThatWasMoved == &sliderReturnTime)
+    else if (sliderThatWasMoved == &sliderSpectrumAnalyserReturnTime)
     {
-        switch ((int)sliderReturnTime.getValue()) {
+        switch ((int)sliderSpectrumAnalyserReturnTime.getValue()) {
             case 1:
                 spectrumAnalyser -> decayRatioAt.store (0.70f);
                 break;
@@ -469,10 +522,10 @@ void ChannelStripAnalyserAudioProcessorEditor::sliderValueChanged (Slider* slide
     }
     
     //==============================================================================
-    else if (sliderThatWasMoved == &sliderTimeAverage)
+    else if (sliderThatWasMoved == &sliderSpectrumDifferenceTimeAverage)
     {
         //[UserSliderCode_sliderTimeAverage] -- add your slider handling code here..
-        switch ((int)sliderTimeAverage.getValue()) {
+        switch ((int)sliderSpectrumDifferenceTimeAverage.getValue()) {
             case 1:
                 spectrumDifference -> numOfHistorySamplesAt.store(3);
                 phaseDifference    -> numOfHistorySamplesAt.store(3);
@@ -492,24 +545,12 @@ void ChannelStripAnalyserAudioProcessorEditor::sliderValueChanged (Slider* slide
         }
         //[/UserSliderCode_sliderTimeAverage]
     }
-    else if (sliderThatWasMoved == &sliderRangeSpectrumDifference)
+    else if (sliderThatWasMoved == &sliderSpectrumDifferenceRange)
     {
         //[UserSliderCode_sliderRangeSpectrumDifference] -- add your slider handling code here..
-        spectrumDifference -> scaleModeAt.store((int) sliderRangeSpectrumDifference.getValue());
+        spectrumDifference -> scaleModeAt.store((int) sliderSpectrumDifferenceRange.getValue());
         spectrumDifference -> axisNeedsUpdate.store(true);
         //[/UserSliderCode_sliderRangeSpectrumDifference]
-    }
-    
-    //==============================================================================
-    else if (sliderThatWasMoved == &sliderLevelMeter2)
-    {
-        //[UserSliderCode_sliderLevelMeter2] -- add your slider handling code here..
-        //[/UserSliderCode_sliderLevelMeter2]
-    }
-    else if (sliderThatWasMoved == &sliderLevelMeter1)
-    {
-        //[UserSliderCode_sliderLevelMeter1] -- add your slider handling code here..
-        //[/UserSliderCode_sliderLevelMeter1]
     }
 
 }
@@ -526,7 +567,26 @@ void ChannelStripAnalyserAudioProcessorEditor::buttonClicked (Button* buttonThat
     processor.knownPluginList.addToMenu(pluginsMenu, KnownPluginList::sortByManufacturer);
     
     //[/UserbuttonClicked_Pre]
-    if      (buttonThatWasClicked ==& textButtonMonoMode)
+    if      (buttonThatWasClicked == freezeButton)
+    {
+        if (freezeState == false)
+        {
+            freezeState = true;
+            HighResolutionTimer::stopTimer();
+            freezeButton->setColour (TextButton::ColourIds::buttonColourId, Colour (0xff42a2c8) );
+        }
+        else
+        {
+            freezeState = false;
+            HighResolutionTimer::startTimer(43);
+            freezeButton->setColour (TextButton::ColourIds::buttonColourId, Colour (0xff181f22).darker() );
+        }
+    }
+    else if (buttonThatWasClicked == compensateDelay)
+    {
+        processor.triggerGraphPrepareToPlay();
+    }
+    else if (buttonThatWasClicked == &textButtonMonoMode)
     {
         spectrumDifference -> analyseMode.store (1);
         phaseDifference    -> analyseMode.store (1);
@@ -534,7 +594,7 @@ void ChannelStripAnalyserAudioProcessorEditor::buttonClicked (Button* buttonThat
         textButtonLRMode   .setToggleState(false, juce::NotificationType::dontSendNotification);
         textButtonMSMode   .setToggleState(false, juce::NotificationType::dontSendNotification);
     }
-    else if (buttonThatWasClicked ==& textButtonLRMode)
+    else if (buttonThatWasClicked == &textButtonLRMode)
     {
         spectrumDifference -> analyseMode.store (2);
         phaseDifference    -> analyseMode.store (2);
@@ -542,7 +602,7 @@ void ChannelStripAnalyserAudioProcessorEditor::buttonClicked (Button* buttonThat
         textButtonMonoMode .setToggleState(false, juce::NotificationType::dontSendNotification);
         textButtonMSMode   .setToggleState(false, juce::NotificationType::dontSendNotification);
     }
-    else if (buttonThatWasClicked ==& textButtonMSMode)
+    else if (buttonThatWasClicked == &textButtonMSMode)
     {
         spectrumDifference -> analyseMode.store (3);
         phaseDifference    -> analyseMode.store (3);
@@ -591,7 +651,8 @@ void ChannelStripAnalyserAudioProcessorEditor::buttonClicked (Button* buttonThat
     
     else if (buttonThatWasClicked == pluginOpenButton1)
     {
-        if (processor.plugIns[0]) editors[0]->setVisible(true);
+        if (processor.plugIns[0])
+            if (editors[0] != nullptr) editors[0]->setVisible(true);
     }
     
     else if (buttonThatWasClicked == &pluginBypassButton1)
@@ -625,7 +686,9 @@ void ChannelStripAnalyserAudioProcessorEditor::buttonClicked (Button* buttonThat
     
     else if (buttonThatWasClicked == pluginOpenButton2)
     {
-        if (processor.plugIns[1]) editors[1]->setVisible(true);
+        if (processor.plugIns[1])
+            if (editors[1] != nullptr) editors[1]->setVisible(true);
+
     }
     
     else if (buttonThatWasClicked == &pluginBypassButton2)
@@ -660,7 +723,8 @@ void ChannelStripAnalyserAudioProcessorEditor::buttonClicked (Button* buttonThat
     
     else if (buttonThatWasClicked == pluginOpenButton3)
     {
-        if (processor.plugIns[2]) editors[2]->setVisible(true);
+        if (processor.plugIns[2])
+            if (editors[2] != nullptr) editors[2]->setVisible(true);
     }
     
     else if (buttonThatWasClicked == &pluginBypassButton3)
@@ -695,7 +759,8 @@ void ChannelStripAnalyserAudioProcessorEditor::buttonClicked (Button* buttonThat
     
     else if (buttonThatWasClicked == pluginOpenButton4)
     {
-        if (processor.plugIns[3]) editors[3]->setVisible(true);
+        if (processor.plugIns[3])
+            if (editors[3] != nullptr) editors[3]->setVisible(true);
     }
     
     else if (buttonThatWasClicked == &pluginBypassButton4)
@@ -730,7 +795,8 @@ void ChannelStripAnalyserAudioProcessorEditor::buttonClicked (Button* buttonThat
     
     else if (buttonThatWasClicked == pluginOpenButton5)
     {
-        if (processor.plugIns[4]) editors[4]->setVisible(true);
+        if (processor.plugIns[4])
+            if (editors[4] != nullptr) editors[4]->setVisible(true);
     }
     
     else if (buttonThatWasClicked == &pluginBypassButton5)
@@ -765,7 +831,8 @@ void ChannelStripAnalyserAudioProcessorEditor::buttonClicked (Button* buttonThat
     
     else if (buttonThatWasClicked == pluginOpenButton6)
     {
-        if (processor.plugIns[5]) editors[5]->setVisible(true);
+        if (processor.plugIns[5])
+            if (editors[5] != nullptr) editors[5]->setVisible(true);
     }
     
     else if (buttonThatWasClicked == &pluginBypassButton6)
@@ -779,175 +846,24 @@ void ChannelStripAnalyserAudioProcessorEditor::buttonClicked (Button* buttonThat
 }
 
 //[MiscUserCode] You can add your own definitions of your custom methods or any other code here...
-void ChannelStripAnalyserAudioProcessorEditor::canVisualizersPaint(bool state)
-{
-//    spectrumAnalyser   -> canPaint.store(state);
-//    spectrumDifference -> canPaint.store(state);
-//    phaseDifference    -> canPaint.store(state);
-//    stereoAnalyser     -> canPaint.store(state);
-//    waveformAnalyser   -> canPaint.store(state);
-}
-
-void ChannelStripAnalyserAudioProcessorEditor::setBuffersForVisualizers()
-{
-//    spectrumAnalyser   -> setBuffers (processor.getAudioBuffers(0), processor.getAudioBuffers(1) );
-//    spectrumDifference -> setBuffers (processor.getAudioBuffers(0), processor.getAudioBuffers(1) );
-//    phaseDifference    -> setBuffers (processor.getAudioBuffers(0), processor.getAudioBuffers(1) );
-//    stereoAnalyser     -> setBuffers (processor.getAudioBuffers(0), processor.getAudioBuffers(1) );
-//    waveformAnalyser   -> setBuffers (processor.getAudioBuffers(0), processor.getAudioBuffers(1) );
-}
-
-void ChannelStripAnalyserAudioProcessorEditor::repaintVisualizers()
-{
-//    spectrumAnalyser   -> lastWrittenSize.  store (processor.lastWrittenSize.load());
-//    spectrumAnalyser   -> lastWrittenIndex. store (processor.lastWrittenIndex.load());
-//    spectrumAnalyser   -> repaint();
-    
-//    spectrumDifference -> repaint();
-//    phaseDifference    -> repaint();
-//    stereoAnalyser     -> repaint();
-//    waveformAnalyser   -> repaint();
-
-}
-
+//==============================================================================
 void ChannelStripAnalyserAudioProcessorEditor::addUiElements()
 {
+// ========================================================================================================================
+    // WAVEFORM
+    addAndMakeVisible (sliderWaveformRange);
+    sliderWaveformRange.setRange (1, 3, 1);
+    sliderWaveformRange.setSliderStyle (Slider::LinearHorizontal);
+    sliderWaveformRange.setTextBoxStyle (Slider::NoTextBox, false, 80, 20);
+    sliderWaveformRange.addListener (this);
+    sliderWaveformRange.setBounds (744, 492, 72, 16);
     
-    addAndMakeVisible (sliderRangeVectorscope);
-    sliderRangeVectorscope.setRange (0, 10, 0);
-    sliderRangeVectorscope.setSliderStyle (Slider::LinearHorizontal);
-    sliderRangeVectorscope.setTextBoxStyle (Slider::NoTextBox, false, 80, 20);
-    sliderRangeVectorscope.addListener (this);
-    sliderRangeVectorscope.setBounds (744, 671, 72, 16);
-    
-    addAndMakeVisible (sliderVanishTime);
-    sliderVanishTime.setRange (0, 10, 0);
-    sliderVanishTime.setSliderStyle (Slider::LinearHorizontal);
-    sliderVanishTime.setTextBoxStyle (Slider::NoTextBox, false, 80, 20);
-    sliderVanishTime.addListener (this);
-    sliderVanishTime.setBounds (744, 703, 72, 16);
-    
-    addAndMakeVisible (sliderRangeSpectrumAnalyser);
-    sliderRangeSpectrumAnalyser.setRange (0, 3, 1);
-    sliderRangeSpectrumAnalyser.setSliderStyle (Slider::LinearHorizontal);
-    sliderRangeSpectrumAnalyser.setTextBoxStyle (Slider::NoTextBox, false, 80, 20);
-    sliderRangeSpectrumAnalyser.addListener (this);
-    sliderRangeSpectrumAnalyser.setBounds (904, 487, 72, 16);
-    
-    addAndMakeVisible (sliderReturnTime);
-    sliderReturnTime.setRange (0, 10, 0);
-    sliderReturnTime.setSliderStyle (Slider::LinearHorizontal);
-    sliderReturnTime.setTextBoxStyle (Slider::NoTextBox, false, 80, 20);
-    sliderReturnTime.addListener (this);
-    sliderReturnTime.setBounds (904, 519, 72, 16);
-    
-    addAndMakeVisible (sliderCurbeOffset);
-    sliderCurbeOffset.setRange (0, 10, 0);
-    sliderCurbeOffset.setSliderStyle (Slider::LinearHorizontal);
-    sliderCurbeOffset.setTextBoxStyle (Slider::NoTextBox, false, 80, 20);
-    sliderCurbeOffset.addListener (this);
-    sliderCurbeOffset.setBounds (744, 487, 72, 16);
-    
-    addAndMakeVisible (sliderDifferenceGain);
-    sliderDifferenceGain.setRange (0, 10, 0);
-    sliderDifferenceGain.setSliderStyle (Slider::LinearHorizontal);
-    sliderDifferenceGain.setTextBoxStyle (Slider::NoTextBox, false, 80, 20);
-    sliderDifferenceGain.addListener (this);
-    sliderDifferenceGain.setBounds (744, 519, 72, 16);
-    
-    addAndMakeVisible (sliderRMSWindow);
-    sliderRMSWindow.setRange (0, 10, 0);
-    sliderRMSWindow.setSliderStyle (Slider::LinearHorizontal);
-    sliderRMSWindow.setTextBoxStyle (Slider::NoTextBox, false, 80, 20);
-    sliderRMSWindow.addListener (this);
-    sliderRMSWindow.setBounds (744, 551, 72, 16);
-    
-    addAndMakeVisible (sliderZoomX);
-    sliderZoomX.setRange (0, 10, 0);
-    sliderZoomX.setSliderStyle (Slider::LinearHorizontal);
-    sliderZoomX.setTextBoxStyle (Slider::NoTextBox, false, 80, 20);
-    sliderZoomX.addListener (this);
-    sliderZoomX.setBounds (744, 583, 72, 16);
-    
-    addAndMakeVisible (sliderZoomY);
-    sliderZoomY.setRange (0, 10, 0);
-    sliderZoomY.setSliderStyle (Slider::LinearHorizontal);
-    sliderZoomY.setTextBoxStyle (Slider::NoTextBox, false, 80, 20);
-    sliderZoomY.addListener (this);
-    sliderZoomY.setBounds (744, 615, 72, 16);
-    
-    addAndMakeVisible (sliderTimeAverage);
-    sliderTimeAverage.setRange (0, 10, 0);
-    sliderTimeAverage.setSliderStyle (Slider::LinearHorizontal);
-    sliderTimeAverage.setTextBoxStyle (Slider::NoTextBox, false, 80, 20);
-    sliderTimeAverage.addListener (this);
-    sliderTimeAverage.setBounds (904, 615, 72, 16);
-    
-    addAndMakeVisible (sliderRangeSpectrumDifference);
-    sliderRangeSpectrumDifference.setRange (0, 10, 0);
-    sliderRangeSpectrumDifference.setSliderStyle (Slider::LinearHorizontal);
-    sliderRangeSpectrumDifference.setTextBoxStyle (Slider::NoTextBox, false, 80, 20);
-    sliderRangeSpectrumDifference.addListener (this);
-    sliderRangeSpectrumDifference.setBounds (904, 583, 72, 16);
-    
-    addAndMakeVisible (sliderLevelMeter2);
-    sliderLevelMeter2.setRange (0, 10, 0);
-    sliderLevelMeter2.setSliderStyle (Slider::LinearHorizontal);
-    sliderLevelMeter2.setTextBoxStyle (Slider::NoTextBox, false, 80, 20);
-    sliderLevelMeter2.addListener (this);
-    sliderLevelMeter2.setBounds (904, 703, 72, 16);
-    
-    addAndMakeVisible (sliderLevelMeter1);
-    sliderLevelMeter1.setRange (0, 10, 0);
-    sliderLevelMeter1.setSliderStyle (Slider::LinearHorizontal);
-    sliderLevelMeter1.setTextBoxStyle (Slider::NoTextBox, false, 80, 20);
-    sliderLevelMeter1.addListener (this);
-    sliderLevelMeter1.setBounds (904, 671, 72, 16);
-    
-    
-    //[/Constructor_pre]
-    
-    // ----------------------------------------------------------- GUI CODE ----------------------------------------------------------------------------
-    
-    addAndMakeVisible (curveOffsetLabelText = new Label (String(),TRANS("curve offset\n")));
-    curveOffsetLabelText->setFont (Font ("Avenir Next", 15.00f, Font::plain).withTypefaceStyle ("Regular"));
-    curveOffsetLabelText->setJustificationType (Justification::centredLeft);
-    curveOffsetLabelText->setEditable (false, false, false);
-    curveOffsetLabelText->setColour (TextEditor::textColourId, Colours::black);
-    curveOffsetLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
-    curveOffsetLabelText->setBounds (816, 482, 84, 24);
-    
-    addAndMakeVisible (differenceGainLabelText = new Label (String(),TRANS("difference gain\n")));
-    differenceGainLabelText->setFont (Font ("Avenir Next", 15.00f, Font::plain).withTypefaceStyle ("Regular"));
-    differenceGainLabelText->setJustificationType (Justification::centredLeft);
-    differenceGainLabelText->setEditable (false, false, false);
-    differenceGainLabelText->setColour (TextEditor::textColourId, Colours::black);
-    differenceGainLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
-    differenceGainLabelText->setBounds (816, 514, 90, 24);
-    
-    addAndMakeVisible (rmsWindowLabelText = new Label (String(),TRANS("RMS window\n")));
-    rmsWindowLabelText->setFont (Font ("Avenir Next", 15.00f, Font::plain).withTypefaceStyle ("Regular"));
-    rmsWindowLabelText->setJustificationType (Justification::centredLeft);
-    rmsWindowLabelText->setEditable (false, false, false);
-    rmsWindowLabelText->setColour (TextEditor::textColourId, Colours::black);
-    rmsWindowLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
-    rmsWindowLabelText->setBounds (816, 546, 84, 24);
-    
-    addAndMakeVisible (zoomxLabelText = new Label ("new label",TRANS("zoom X\n")));
-    zoomxLabelText->setFont (Font ("Avenir Next", 15.00f, Font::plain).withTypefaceStyle ("Regular"));
-    zoomxLabelText->setJustificationType (Justification::centredLeft);
-    zoomxLabelText->setEditable (false, false, false);
-    zoomxLabelText->setColour (TextEditor::textColourId, Colours::black);
-    zoomxLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
-    zoomxLabelText->setBounds (816, 578, 84, 24);
-    
-    addAndMakeVisible (zoomyLabelText = new Label ("new label",TRANS("zoom Y\n")));
-    zoomyLabelText->setFont (Font ("Avenir Next", 15.00f, Font::plain).withTypefaceStyle ("Regular"));
-    zoomyLabelText->setJustificationType (Justification::centredLeft);
-    zoomyLabelText->setEditable (false, false, false);
-    zoomyLabelText->setColour (TextEditor::textColourId, Colours::black);
-    zoomyLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
-    zoomyLabelText->setBounds (816, 610, 84, 24);
+    addAndMakeVisible (sliderWaveformGain);
+    sliderWaveformGain.setRange (0, 2, 0);
+    sliderWaveformGain.setSliderStyle (Slider::LinearHorizontal);
+    sliderWaveformGain.setTextBoxStyle (Slider::NoTextBox, false, 80, 20);
+    sliderWaveformGain.addListener (this);
+    sliderWaveformGain.setBounds (744, 524, 72, 16);
     
     addAndMakeVisible (waveformNameTitle = new Label (String(),TRANS("WAVEFORM")));
     waveformNameTitle->setFont (Font ("DIN Alternate", 15.00f, Font::plain).withTypefaceStyle ("Bold"));
@@ -955,31 +871,39 @@ void ChannelStripAnalyserAudioProcessorEditor::addUiElements()
     waveformNameTitle->setEditable (false, false, false);
     waveformNameTitle->setColour (TextEditor::textColourId, Colours::black);
     waveformNameTitle->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
-    waveformNameTitle->setBounds (745, 455, 150, 24);
+    waveformNameTitle->setBounds (745, 460, 150, 24);
     
-    addAndMakeVisible (spectrumAnalyserNameTitle = new Label (String(),TRANS("SPECTRUM ANALYSER\n")));
-    spectrumAnalyserNameTitle->setFont (Font ("DIN Alternate", 15.00f, Font::plain).withTypefaceStyle ("Bold"));
-    spectrumAnalyserNameTitle->setJustificationType (Justification::centredLeft);
-    spectrumAnalyserNameTitle->setEditable (false, false, false);
-    spectrumAnalyserNameTitle->setColour (TextEditor::textColourId, Colours::black);
-    spectrumAnalyserNameTitle->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
-    spectrumAnalyserNameTitle->setBounds (904, 456, 150, 24);
+    addAndMakeVisible (waveformRangeLabelText = new Label (String(),TRANS("range\n")));
+    waveformRangeLabelText->setFont (Font ("Avenir Next", 15.00f, Font::plain).withTypefaceStyle ("Regular"));
+    waveformRangeLabelText->setJustificationType (Justification::centredLeft);
+    waveformRangeLabelText->setEditable (false, false, false);
+    waveformRangeLabelText->setColour (TextEditor::textColourId, Colours::black);
+    waveformRangeLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
+    waveformRangeLabelText->setBounds (816, 487, 84, 24);
     
-    addAndMakeVisible (spectrumDifferenceNameTitle = new Label (String(),TRANS("SPECTRUM DIFFERENCE\n""\n")));
-    spectrumDifferenceNameTitle->setFont (Font ("DIN Alternate", 15.00f, Font::plain).withTypefaceStyle ("Bold"));
-    spectrumDifferenceNameTitle->setJustificationType (Justification::centredLeft);
-    spectrumDifferenceNameTitle->setEditable (false, false, false);
-    spectrumDifferenceNameTitle->setColour (TextEditor::textColourId, Colours::black);
-    spectrumDifferenceNameTitle->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
-    spectrumDifferenceNameTitle->setBounds (904, 552, 150, 24);
+    addAndMakeVisible (waveformGainLabelText = new Label (String(),TRANS("gain\n")));
+    waveformGainLabelText->setFont (Font ("Avenir Next", 15.00f, Font::plain).withTypefaceStyle ("Regular"));
+    waveformGainLabelText->setJustificationType (Justification::centredLeft);
+    waveformGainLabelText->setEditable (false, false, false);
+    waveformGainLabelText->setColour (TextEditor::textColourId, Colours::black);
+    waveformGainLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
+    waveformGainLabelText->setBounds (816, 519, 90, 24);
+
+    // ========================================================================================================================
+    // VECTORSCOPE
+    addAndMakeVisible (sliderVectorscopeRange);
+    sliderVectorscopeRange.setRange (50, 400, 0);
+    sliderVectorscopeRange.setSliderStyle (Slider::LinearHorizontal);
+    sliderVectorscopeRange.setTextBoxStyle (Slider::NoTextBox, false, 80, 20);
+    sliderVectorscopeRange.addListener (this);
+    sliderVectorscopeRange.setBounds (909, 492, 72, 16);
     
-    addAndMakeVisible (levelMeterNameTitle = new Label (String(),TRANS("LEVEL METER\n")));
-    levelMeterNameTitle->setFont (Font ("DIN Alternate", 15.00f, Font::plain).withTypefaceStyle ("Bold"));
-    levelMeterNameTitle->setJustificationType (Justification::centredLeft);
-    levelMeterNameTitle->setEditable (false, false, false);
-    levelMeterNameTitle->setColour (TextEditor::textColourId, Colours::black);
-    levelMeterNameTitle->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
-    levelMeterNameTitle->setBounds (904, 640, 150, 24);
+    addAndMakeVisible (sliderVectorscopeVanishTime);
+    sliderVectorscopeVanishTime.setRange (5, 50, 1);
+    sliderVectorscopeVanishTime.setSliderStyle (Slider::LinearHorizontal);
+    sliderVectorscopeVanishTime.setTextBoxStyle (Slider::NoTextBox, false, 80, 20);
+    sliderVectorscopeVanishTime.addListener (this);
+    sliderVectorscopeVanishTime.setBounds (909, 524, 72, 16);
     
     addAndMakeVisible (vectorscopeNameTitle = new Label (String(),TRANS("VECTORSCOPE\n")));
     vectorscopeNameTitle->setFont (Font ("DIN Alternate", 15.00f, Font::plain).withTypefaceStyle ("Bold"));
@@ -987,82 +911,116 @@ void ChannelStripAnalyserAudioProcessorEditor::addUiElements()
     vectorscopeNameTitle->setEditable (false, false, false);
     vectorscopeNameTitle->setColour (TextEditor::textColourId, Colours::black);
     vectorscopeNameTitle->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
-    vectorscopeNameTitle->setBounds (744, 640, 150, 24);
+    vectorscopeNameTitle->setBounds (909, 460, 150, 24);
     
-    addAndMakeVisible (rangeVectorscopLabelText = new Label (String(),TRANS("range\n")));
-    rangeVectorscopLabelText->setFont (Font ("Avenir Next", 15.00f, Font::plain).withTypefaceStyle ("Regular"));
-    rangeVectorscopLabelText->setJustificationType (Justification::centredLeft);
-    rangeVectorscopLabelText->setEditable (false, false, false);
-    rangeVectorscopLabelText->setColour (TextEditor::textColourId, Colours::black);
-    rangeVectorscopLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
-    rangeVectorscopLabelText->setBounds (816, 666, 80, 24);
+    addAndMakeVisible (vectorscopeRangeLabelText = new Label (String(),TRANS("range\n")));
+    vectorscopeRangeLabelText->setFont (Font ("Avenir Next", 15.00f, Font::plain).withTypefaceStyle ("Regular"));
+    vectorscopeRangeLabelText->setJustificationType (Justification::centredLeft);
+    vectorscopeRangeLabelText->setEditable (false, false, false);
+    vectorscopeRangeLabelText->setColour (TextEditor::textColourId, Colours::black);
+    vectorscopeRangeLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
+    vectorscopeRangeLabelText->setBounds (981, 487, 150, 24);
     
-    addAndMakeVisible (vanishTimeLabelText = new Label (String(),TRANS("vanish time\n")));
-    vanishTimeLabelText->setFont (Font ("Avenir Next", 15.00f, Font::plain).withTypefaceStyle ("Regular"));
-    vanishTimeLabelText->setJustificationType (Justification::centredLeft);
-    vanishTimeLabelText->setEditable (false, false, false);
-    vanishTimeLabelText->setColour (TextEditor::textColourId, Colours::black);
-    vanishTimeLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
-    vanishTimeLabelText->setBounds (816, 698, 80, 24);
+    addAndMakeVisible (vectorscopeVanishTimeLabelText = new Label (String(),TRANS("vanish time\n")));
+    vectorscopeVanishTimeLabelText->setFont (Font ("Avenir Next", 15.00f, Font::plain).withTypefaceStyle ("Regular"));
+    vectorscopeVanishTimeLabelText->setJustificationType (Justification::centredLeft);
+    vectorscopeVanishTimeLabelText->setEditable (false, false, false);
+    vectorscopeVanishTimeLabelText->setColour (TextEditor::textColourId, Colours::black);
+    vectorscopeVanishTimeLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
+    vectorscopeVanishTimeLabelText->setBounds (981, 519, 150, 24);
     
-    addAndMakeVisible (rangeVectorscopeLabelText = new Label (String(),TRANS("range\n")));
-    rangeVectorscopeLabelText->setFont (Font ("Avenir Next", 15.00f, Font::plain).withTypefaceStyle ("Regular"));
-    rangeVectorscopeLabelText->setJustificationType (Justification::centredLeft);
-    rangeVectorscopeLabelText->setEditable (false, false, false);
-    rangeVectorscopeLabelText->setColour (TextEditor::textColourId, Colours::black);
-    rangeVectorscopeLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
-    rangeVectorscopeLabelText->setBounds (976, 482, 150, 24);
+    // ========================================================================================================================
+    // SPECTRUM ANALYSER
+
+    addAndMakeVisible (sliderSpectrumAnalyserRange);
+    sliderSpectrumAnalyserRange.setRange (0, 3, 1);
+    sliderSpectrumAnalyserRange.setSliderStyle (Slider::LinearHorizontal);
+    sliderSpectrumAnalyserRange.setTextBoxStyle (Slider::NoTextBox, false, 80, 20);
+    sliderSpectrumAnalyserRange.addListener (this);
+    sliderSpectrumAnalyserRange.setBounds (744, 598, 72, 16);
     
-    addAndMakeVisible (returnTimeLabelText = new Label (String(),TRANS("return time\n")));
-    returnTimeLabelText->setFont (Font ("Avenir Next", 15.00f, Font::plain).withTypefaceStyle ("Regular"));
-    returnTimeLabelText->setJustificationType (Justification::centredLeft);
-    returnTimeLabelText->setEditable (false, false, false);
-    returnTimeLabelText->setColour (TextEditor::textColourId, Colours::black);
-    returnTimeLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
-    returnTimeLabelText->setBounds (976, 514, 150, 24);
+    addAndMakeVisible (sliderSpectrumAnalyserReturnTime);
+    sliderSpectrumAnalyserReturnTime.setRange (0, 10, 0);
+    sliderSpectrumAnalyserReturnTime.setSliderStyle (Slider::LinearHorizontal);
+    sliderSpectrumAnalyserReturnTime.setTextBoxStyle (Slider::NoTextBox, false, 80, 20);
+    sliderSpectrumAnalyserReturnTime.addListener (this);
+    sliderSpectrumAnalyserReturnTime.setBounds (744, 630, 72, 16);
     
-    addAndMakeVisible (rangeSpectrumLabelText = new Label (String(),TRANS("range\n")));
-    rangeSpectrumLabelText->setFont (Font ("Avenir Next", 15.00f, Font::plain).withTypefaceStyle ("Regular"));
-    rangeSpectrumLabelText->setJustificationType (Justification::centredLeft);
-    rangeSpectrumLabelText->setEditable (false, false, false);
-    rangeSpectrumLabelText->setColour (TextEditor::textColourId, Colours::black);
-    rangeSpectrumLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
-    rangeSpectrumLabelText->setBounds (976, 578, 150, 24);
+    addAndMakeVisible (spectrumAnalyserNameTitle = new Label (String(),TRANS("SPECTRUM ANALYSER\n")));
+    spectrumAnalyserNameTitle->setFont (Font ("DIN Alternate", 15.00f, Font::plain).withTypefaceStyle ("Bold"));
+    spectrumAnalyserNameTitle->setJustificationType (Justification::centredLeft);
+    spectrumAnalyserNameTitle->setEditable (false, false, false);
+    spectrumAnalyserNameTitle->setColour (TextEditor::textColourId, Colours::black);
+    spectrumAnalyserNameTitle->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
+    spectrumAnalyserNameTitle->setBounds (745, 567, 150, 24);
     
-    addAndMakeVisible (timeAveargeLabelText = new Label (String(),TRANS("time average\n")));
-    timeAveargeLabelText->setFont (Font ("Avenir Next", 15.00f, Font::plain).withTypefaceStyle ("Regular"));
-    timeAveargeLabelText->setJustificationType (Justification::centredLeft);
-    timeAveargeLabelText->setEditable (false, false, false);
-    timeAveargeLabelText->setColour (TextEditor::textColourId, Colours::black);
-    timeAveargeLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
-    timeAveargeLabelText->setBounds (976, 610, 150, 24);
+    addAndMakeVisible (spectrumAnalyserRangeLabelText = new Label (String(),TRANS("range\n")));
+    spectrumAnalyserRangeLabelText->setFont (Font ("Avenir Next", 15.00f, Font::plain).withTypefaceStyle ("Regular"));
+    spectrumAnalyserRangeLabelText->setJustificationType (Justification::centredLeft);
+    spectrumAnalyserRangeLabelText->setEditable (false, false, false);
+    spectrumAnalyserRangeLabelText->setColour (TextEditor::textColourId, Colours::black);
+    spectrumAnalyserRangeLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
+    spectrumAnalyserRangeLabelText->setBounds (816, 593, 150, 24);
     
-    addAndMakeVisible (textEditorTotalDelay = new TextEditor (String()));
-    textEditorTotalDelay->setMultiLine (false);
-    textEditorTotalDelay->setReturnKeyStartsNewLine (false);
-    textEditorTotalDelay->setReadOnly (true);
-    textEditorTotalDelay->setScrollbarsShown (true);
-    textEditorTotalDelay->setCaretVisible (false);
-    textEditorTotalDelay->setPopupMenuEnabled (true);
-    textEditorTotalDelay->setColour (TextEditor::backgroundColourId, Colour (0xff181f22));
-    textEditorTotalDelay->setColour (TextEditor::outlineColourId, Colour (0xff42a2c8));
-    textEditorTotalDelay->setText (String());
-    textEditorTotalDelay->setBounds (752, 736, 80, 24);
+    addAndMakeVisible (spectrumAnalyserReturnTimeLabelText = new Label (String(),TRANS("return time\n")));
+    spectrumAnalyserReturnTimeLabelText->setFont (Font ("Avenir Next", 15.00f, Font::plain).withTypefaceStyle ("Regular"));
+    spectrumAnalyserReturnTimeLabelText->setJustificationType (Justification::centredLeft);
+    spectrumAnalyserReturnTimeLabelText->setEditable (false, false, false);
+    spectrumAnalyserReturnTimeLabelText->setColour (TextEditor::textColourId, Colours::black);
+    spectrumAnalyserReturnTimeLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
+    spectrumAnalyserReturnTimeLabelText->setBounds (816, 625, 150, 24);
     
-    addAndMakeVisible (totalDelayLabelText = new Label (String(),TRANS("total delay\n")));
-    totalDelayLabelText->setFont (Font ("Avenir Next", 15.00f, Font::plain).withTypefaceStyle ("Regular"));
-    totalDelayLabelText->setJustificationType (Justification::centredLeft);
-    totalDelayLabelText->setEditable (false, false, false);
-    totalDelayLabelText->setColour (TextEditor::textColourId, Colours::black);
-    totalDelayLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
-    totalDelayLabelText->setBounds (840, 736, 150, 24);
+    // ========================================================================================================================
+    // SPECTRUM DIFFERENCE
+
+    addAndMakeVisible (sliderSpectrumDifferenceRange);
+    sliderSpectrumDifferenceRange.setRange (1, 3, 1);
+    sliderSpectrumDifferenceRange.setSliderStyle (Slider::LinearHorizontal);
+    sliderSpectrumDifferenceRange.setTextBoxStyle (Slider::NoTextBox, false, 80, 20);
+    sliderSpectrumDifferenceRange.addListener (this);
+    sliderSpectrumDifferenceRange.setBounds (909, 598, 72, 16);
+    
+    addAndMakeVisible (sliderSpectrumDifferenceTimeAverage);
+    sliderSpectrumDifferenceTimeAverage.setRange (0, 10, 0);
+    sliderSpectrumDifferenceTimeAverage.setSliderStyle (Slider::LinearHorizontal);
+    sliderSpectrumDifferenceTimeAverage.setTextBoxStyle (Slider::NoTextBox, false, 80, 20);
+    sliderSpectrumDifferenceTimeAverage.addListener (this);
+    sliderSpectrumDifferenceTimeAverage.setBounds (909, 630, 72, 16);
+    
+    addAndMakeVisible (spectrumDifferenceNameTitle = new Label (String(),TRANS("SPECTRUM DIFFERENCE\n""\n")));
+    spectrumDifferenceNameTitle->setFont (Font ("DIN Alternate", 15.00f, Font::plain).withTypefaceStyle ("Bold"));
+    spectrumDifferenceNameTitle->setJustificationType (Justification::centredLeft);
+    spectrumDifferenceNameTitle->setEditable (false, false, false);
+    spectrumDifferenceNameTitle->setColour (TextEditor::textColourId, Colours::black);
+    spectrumDifferenceNameTitle->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
+    spectrumDifferenceNameTitle->setBounds (909, 567, 150, 24);
+    
+    addAndMakeVisible (spectrumDifferenceRangeLabelText = new Label (String(),TRANS("range\n")));
+    spectrumDifferenceRangeLabelText->setFont (Font ("Avenir Next", 15.00f, Font::plain).withTypefaceStyle ("Regular"));
+    spectrumDifferenceRangeLabelText->setJustificationType (Justification::centredLeft);
+    spectrumDifferenceRangeLabelText->setEditable (false, false, false);
+    spectrumDifferenceRangeLabelText->setColour (TextEditor::textColourId, Colours::black);
+    spectrumDifferenceRangeLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
+    spectrumDifferenceRangeLabelText->setBounds (981, 593, 80, 24);
+    
+    addAndMakeVisible (spectrumDifferencetimeAverageLabelText = new Label (String(),TRANS("time average\n")));
+    spectrumDifferencetimeAverageLabelText->setFont (Font ("Avenir Next", 15.00f, Font::plain).withTypefaceStyle ("Regular"));
+    spectrumDifferencetimeAverageLabelText->setJustificationType (Justification::centredLeft);
+    spectrumDifferencetimeAverageLabelText->setEditable (false, false, false);
+    spectrumDifferencetimeAverageLabelText->setColour (TextEditor::textColourId, Colours::black);
+    spectrumDifferencetimeAverageLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
+    spectrumDifferencetimeAverageLabelText->setBounds (981, 625, 80, 24);
     
     
+// ========================================================================================================================
+    // MODE MONO STEREO MID/SIDE
     addAndMakeVisible (textButtonMonoMode);
     textButtonMonoMode.addListener (this);
+    textButtonMonoMode.setColour (TextEditor::backgroundColourId, Colour (0xff181f22).darker());
+    textButtonMonoMode.setColour (TextEditor::outlineColourId, Colours::grey);
     textButtonMonoMode.setColour (TextButton::buttonColourId, Colour (0xff42a2c8));
     textButtonMonoMode.setColour (TextButton::buttonOnColourId, Colour (0xff181f22));
-    textButtonMonoMode.setBounds (906, 732, 32, 32);
+    textButtonMonoMode.setBounds (744, 655, 32, 32);
     
     addAndMakeVisible (monoModeLabelText = new Label (String(),TRANS("M")));
     monoModeLabelText->setFont (Font ("DIN Alternate", 15.00f, Font::plain).withTypefaceStyle ("Bold"));
@@ -1070,13 +1028,15 @@ void ChannelStripAnalyserAudioProcessorEditor::addUiElements()
     monoModeLabelText->setEditable (false, false, false);
     monoModeLabelText->setColour (TextEditor::textColourId, Colours::black);
     monoModeLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
-    monoModeLabelText->setBounds (926, 736, 25, 25);
+    monoModeLabelText->setBounds (764, 659, 25, 25);
     
     addAndMakeVisible (textButtonLRMode);
     textButtonLRMode.addListener (this);
+    textButtonLRMode.setColour (TextEditor::backgroundColourId, Colour (0xff181f22).darker());
+    textButtonLRMode.setColour (TextEditor::outlineColourId, Colours::grey);
     textButtonLRMode.setColour (TextButton::buttonColourId, Colour (0xff42a2c8));
     textButtonLRMode.setColour (TextButton::buttonOnColourId, Colour (0xff181f22));
-    textButtonLRMode.setBounds (946, 732, 32, 32);
+    textButtonLRMode.setBounds (784, 655, 32, 32);
     
     addAndMakeVisible (leftRightModeLabelText = new Label (String(),TRANS("LR")));
     leftRightModeLabelText->setFont (Font ("DIN Alternate", 15.00f, Font::plain).withTypefaceStyle ("Bold"));
@@ -1084,13 +1044,15 @@ void ChannelStripAnalyserAudioProcessorEditor::addUiElements()
     leftRightModeLabelText->setEditable (false, false, false);
     leftRightModeLabelText->setColour (TextEditor::textColourId, Colours::black);
     leftRightModeLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
-    leftRightModeLabelText->setBounds (966, 736, 25, 25);
+    leftRightModeLabelText->setBounds (804, 659, 25, 25);
     
     addAndMakeVisible (textButtonMSMode);
     textButtonMSMode.addListener (this);
+    textButtonMSMode.setColour (TextEditor::backgroundColourId, Colour (0xff181f22).darker());
+    textButtonMSMode.setColour (TextEditor::outlineColourId, Colours::grey);
     textButtonMSMode.setColour (TextButton::buttonColourId, Colour (0xff42a2c8));
     textButtonMSMode.setColour (TextButton::buttonOnColourId, Colour (0xff181f22));
-    textButtonMSMode.setBounds (991, 732, 32, 32);
+    textButtonMSMode.setBounds (829, 655, 32, 32);
     
     addAndMakeVisible (midSideModeLabelText = new Label (String(),TRANS("MS")));
     midSideModeLabelText->setFont (Font ("DIN Alternate", 15.00f, Font::plain).withTypefaceStyle ("Bold"));
@@ -1098,11 +1060,69 @@ void ChannelStripAnalyserAudioProcessorEditor::addUiElements()
     midSideModeLabelText->setEditable (false, false, false);
     midSideModeLabelText->setColour (TextEditor::textColourId, Colours::black);
     midSideModeLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
-    midSideModeLabelText->setBounds (1011, 736, 25, 25);
+    midSideModeLabelText->setBounds (849, 659, 25, 25);
 
-
+// ========================================================================================================================
+    // FFT SIZE
+    addAndMakeVisible (fftSizeButton = new ComboBox (String()));
+    fftSizeButton->setColour(ComboBox::outlineColourId, Colours::grey);
+    fftSizeButton->setColour(ComboBox::arrowColourId, Colour (0xff42a2c8));
+    fftSizeButton->setColour(ComboBox::backgroundColourId, Colour (0xff181f22).darker());
+    fftSizeButton->addItem("1024", 1);
+    fftSizeButton->addItem("2048", 2);
+    fftSizeButton->addItem("4098", 3);
+    fftSizeButton->setSelectedId(1);
+    fftSizeButton->setBounds (909, 662, 72, 18);
+    fftSizeButton->onChange = [this] { fftSizeChanged(); };
+    
+    addAndMakeVisible (fftSizeLabelText = new Label (String(),TRANS("FFT size\n")));
+    fftSizeLabelText->setFont (Font ("Avenir Next", 15.00f, Font::plain).withTypefaceStyle ("Regular"));
+    fftSizeLabelText->setJustificationType (Justification::centredLeft);
+    fftSizeLabelText->setEditable (false, false, false);
+    fftSizeLabelText->setColour (TextEditor::textColourId, Colours::black);
+    fftSizeLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
+    fftSizeLabelText->setBounds (981, 662, 80, 24);
+    
+    // DELAY
+    addAndMakeVisible (textEditorTotalDelay = new TextEditor (String()));
+    textEditorTotalDelay->setMultiLine (false);
+    textEditorTotalDelay->setReturnKeyStartsNewLine (false);
+    textEditorTotalDelay->setReadOnly (true);
+    textEditorTotalDelay->setScrollbarsShown (true);
+    textEditorTotalDelay->setCaretVisible (false);
+    textEditorTotalDelay->setPopupMenuEnabled (true);
+    textEditorTotalDelay->setColour (TextEditor::backgroundColourId, Colour (0xff181f22).darker());
+    textEditorTotalDelay->setColour (TextEditor::outlineColourId, Colours::grey);
+    textEditorTotalDelay->setText (String());
+    textEditorTotalDelay->setBounds (747, 720, 72, 18);
+    
+    addAndMakeVisible (totalDelayLabelText = new Label (String(),TRANS("total delay\n")));
+    totalDelayLabelText->setFont (Font ("Avenir Next", 15.00f, Font::plain).withTypefaceStyle ("Regular"));
+    totalDelayLabelText->setJustificationType (Justification::centredLeft);
+    totalDelayLabelText->setEditable (false, false, false);
+    totalDelayLabelText->setColour (TextEditor::textColourId, Colours::black);
+    totalDelayLabelText->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
+    totalDelayLabelText->setBounds (819, 720, 150, 24);
     
     
+    addAndMakeVisible (freezeButton = new TextButton (String()));
+    freezeButton->setButtonText (TRANS("freeze"));
+    freezeButton->addListener (this);
+    freezeButton->setColour (TextButton::buttonColourId, Colour (0xff181f22).darker());
+    freezeButton->setColour (TextButton::buttonOnColourId, Colour (0xff181f22).brighter());
+    freezeButton->setBounds (915, 720, 125, 40);
+    
+    addAndMakeVisible (compensateDelay = new TextButton (String()));
+    compensateDelay->setButtonText (TRANS("compensate delay"));
+    compensateDelay->addListener (this);
+    compensateDelay->setColour (TextButton::buttonColourId, Colour (0xff181f22).darker());
+    compensateDelay->setColour (TextButton::buttonOnColourId, Colour (0xff181f22).brighter());
+    compensateDelay->setBounds (747, 742, 136, 18);
+
+// ========================================================================================================================
+    // PLUGIN SLOTS
+    
+    // MANAGER
     addAndMakeVisible (pluginsManagerButton = new TextButton (String()));
     pluginsManagerButton->setButtonText (TRANS("plugins manager"));
     pluginsManagerButton->addListener (this);
@@ -1110,6 +1130,7 @@ void ChannelStripAnalyserAudioProcessorEditor::addUiElements()
     pluginsManagerButton->setColour (TextButton::buttonOnColourId, Colour (0xff181f22));
     pluginsManagerButton->setBounds (17, 16, 143, 32);
     
+    // 1
     addAndMakeVisible (pluginLoadButton1 = new TextButton (String()));
     pluginLoadButton1->setButtonText (TRANS("load plugin"));
     pluginLoadButton1->addListener (this);
@@ -1139,6 +1160,7 @@ void ChannelStripAnalyserAudioProcessorEditor::addUiElements()
     pluginBypassButton1.addListener (this);
     pluginBypassButton1.setBounds (296, 16, 24, 24);
     
+    // 2
     addAndMakeVisible (pluginLoadButton2 = new TextButton (String()));
     pluginLoadButton2->setButtonText (TRANS("load plugin"));
     pluginLoadButton2->addListener (this);
@@ -1168,6 +1190,7 @@ void ChannelStripAnalyserAudioProcessorEditor::addUiElements()
     pluginBypassButton2.addListener (this);
     pluginBypassButton2.setBounds (448, 16, 24, 24);
     
+    // 3
     addAndMakeVisible (pluginLoadButton3 = new TextButton (String()));
     pluginLoadButton3->setButtonText (TRANS("load plugin"));
     pluginLoadButton3->addListener (this);
@@ -1197,6 +1220,7 @@ void ChannelStripAnalyserAudioProcessorEditor::addUiElements()
     pluginBypassButton3.addListener (this);
     pluginBypassButton3.setBounds (600, 16, 24, 24);
     
+    // 4
     addAndMakeVisible (pluginLoadButton4 = new TextButton (String()));
     pluginLoadButton4->setButtonText (TRANS("load plugin"));
     pluginLoadButton4->addListener (this);
@@ -1226,6 +1250,7 @@ void ChannelStripAnalyserAudioProcessorEditor::addUiElements()
     pluginBypassButton4.addListener (this);
     pluginBypassButton4.setBounds (752, 16, 24, 24);
     
+    // 5
     addAndMakeVisible (pluginLoadButton5 = new TextButton (String()));
     pluginLoadButton5->setButtonText (TRANS("load plugin"));
     pluginLoadButton5->addListener (this);
@@ -1255,6 +1280,7 @@ void ChannelStripAnalyserAudioProcessorEditor::addUiElements()
     pluginBypassButton5.addListener (this);
     pluginBypassButton5.setBounds (904, 16, 24, 24);
     
+    // 6
     addAndMakeVisible (pluginLoadButton6 = new TextButton (String()));
     pluginLoadButton6->setButtonText (TRANS("load plugin"));
     pluginLoadButton6->addListener (this);
@@ -1284,6 +1310,7 @@ void ChannelStripAnalyserAudioProcessorEditor::addUiElements()
     pluginBypassButton6.addListener (this);
     pluginBypassButton6.setBounds (1056, 16, 24, 24);
     
+    // PLUGIN TITLE
     addAndMakeVisible (channelStripNameTitle = new Label (String(),TRANS("CHANNEL STRIP")));
     channelStripNameTitle->setFont (Font ("DIN Alternate", 20.80f, Font::plain));
     channelStripNameTitle->setJustificationType (Justification::centredLeft);
@@ -1294,7 +1321,7 @@ void ChannelStripAnalyserAudioProcessorEditor::addUiElements()
     channelStripNameTitle->setColour (TextEditor::backgroundColourId, Colour (0x00000000));
     channelStripNameTitle->setBounds (1101, -7, 175, 67);
     
-    addAndMakeVisible (analyserNameTitle = new Label (String(),TRANS("ANALYSER")));
+    addAndMakeVisible (analyserNameTitle = new Label (String(),TRANS("ANALYS3R")));
     analyserNameTitle->setFont (Font ("DIN Alternate", 23.30f, Font::plain).withExtraKerningFactor (0.214f));
     analyserNameTitle->setJustificationType (Justification::centredLeft);
     analyserNameTitle->setEditable (false, false, false);
@@ -1308,46 +1335,37 @@ void ChannelStripAnalyserAudioProcessorEditor::addUiElements()
 
 void ChannelStripAnalyserAudioProcessorEditor::createParametersAttachments()
 {
-    
-    sliderRangeVectorscopeAttach.reset        (new SliderAttachment(parameters, SLIDER_RANGE_VECTORSCOPE_ID,
-                                                                    sliderRangeVectorscope));
-    sliderVanishTimeAttach.reset              (new SliderAttachment(parameters, SLIDER_VANISH_TIME_ID,
-                                                                    sliderVanishTime));
-    sliderValueChanged (&sliderRangeVectorscope);
-    sliderValueChanged (&sliderVanishTime);
+    sliderWaveformRangeAttach.reset            (new SliderAttachment(parameters, SLIDER_WAVEFORM_RANGE_ID,
+                                                                    sliderWaveformRange));
+    sliderWaveformGainAttach.reset         (new SliderAttachment(parameters, SLIDER_WAVEFORM_TIMEMODE_ID,
+                                                                    sliderWaveformGain));
+    sliderValueChanged (&sliderWaveformRange);
+    sliderValueChanged (&sliderWaveformGain);
+
     //========================================================================================================
-    sliderCurbeOffsetAttach.reset             (new SliderAttachment(parameters, SLIDER_CURBE_OFFSET_ID,
-                                                                    sliderCurbeOffset));
-    sliderDifferenceGainAttach.reset          (new SliderAttachment(parameters, SLIDER_DIFFERENCE_GAIN_ID,
-                                                                    sliderDifferenceGain));
-    sliderRMSWindowAttach.reset               (new SliderAttachment(parameters, SLIDER_RMS_WINDOW_ID,
-                                                                    sliderRMSWindow));
-    sliderZoomXAttach.reset                   (new SliderAttachment(parameters, SLIDER_ZOOM_X_ID,
-                                                                    sliderZoomX));
-    sliderZoomYAttach.reset                   (new SliderAttachment(parameters, SLIDER_ZOOM_Y_ID,
-                                                                    sliderZoomY));
-    
+    sliderVectorscopeRangeAttach.reset        (new SliderAttachment(parameters, SLIDER_RANGE_VECTORSCOPE_ID,
+                                                                    sliderVectorscopeRange));
+    sliderVectorscopeVanishTimeAttach.reset   (new SliderAttachment(parameters, SLIDER_VANISH_TIME_ID,
+                                                                    sliderVectorscopeVanishTime));
+    sliderValueChanged (&sliderVectorscopeRange);
+    sliderValueChanged (&sliderVectorscopeVanishTime);
     
     //========================================================================================================
-    sliderRangeSpectrumAnalyserAttach.reset   (new SliderAttachment(parameters, SLIDER_RANGE_SPECTRUM_ANALYSER_ID,
-                                                                    sliderRangeSpectrumAnalyser));
-    sliderReturnTimeAttach.reset              (new SliderAttachment(parameters, SLIDER_RETURN_TIME_ID,
-                                                                    sliderReturnTime));
-    sliderValueChanged (&sliderRangeSpectrumAnalyser);
-    sliderValueChanged (&sliderReturnTime);
-    //========================================================================================================
-    sliderTimeAverageAttach.reset             (new SliderAttachment(parameters, SLIDER_TIME_AVERAGE_ID,
-                                                                    sliderTimeAverage));
-    sliderRangeSpectrumDifferenceAttach.reset (new SliderAttachment(parameters, SLIDER_RANGE_SPECTRUM_DIFFERENCE_ID,
-                                                                    sliderRangeSpectrumDifference));
-    sliderValueChanged (&sliderTimeAverage);
-    sliderValueChanged (&sliderRangeSpectrumDifference);
-    //========================================================================================================
-    sliderLevelMeter1Attach.reset             (new SliderAttachment(parameters, SLIDER_LEVEL_METER_1_ID,
-                                                                    sliderLevelMeter1));
-    sliderLevelMeter2Attach.reset             (new SliderAttachment(parameters, SLIDER_LEVEL_METER_2_ID,
-                                                                    sliderLevelMeter2));
+    sliderSpectrumAnalyserRangeAttach.reset         (new SliderAttachment(parameters, SLIDER_RANGE_SPECTRUM_ANALYSER_ID,
+                                                                    sliderSpectrumAnalyserRange));
+    sliderSpectrumAnalyserReturnTimeAttach.reset    (new SliderAttachment(parameters, SLIDER_RETURN_TIME_ID,
+                                                                    sliderSpectrumAnalyserReturnTime));
+    sliderValueChanged (&sliderSpectrumAnalyserRange);
+    sliderValueChanged (&sliderSpectrumAnalyserReturnTime);
     
+    //========================================================================================================
+    sliderSpectrumDifferenceRangeAttach.reset           (new SliderAttachment(parameters, SLIDER_RANGE_SPECTRUM_DIFFERENCE_ID,
+                                                                    sliderSpectrumDifferenceRange));
+    sliderSpectrumDifferenceTimeAverageAttach.reset     (new SliderAttachment(parameters, SLIDER_TIME_AVERAGE_ID,
+                                                                              sliderSpectrumDifferenceTimeAverage));
+
+    sliderValueChanged (&sliderSpectrumDifferenceRange);
+    sliderValueChanged (&sliderSpectrumDifferenceTimeAverage);
     
     //========================================================================================================
     pluginBypassButton1Attach.reset           (new ButtonAttachment(parameters, BUTTON_PLUGINBYPASS_1_ID,pluginBypassButton1));

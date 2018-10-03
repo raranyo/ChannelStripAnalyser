@@ -1,48 +1,5 @@
-  #include "PluginProcessor.h"
+#include "PluginProcessor.h"
 #include "PluginEditor.h"
-
-namespace ChannelStripAnalyser
-{
-    void checkBoundries (int numOfSamples, int sizeOfDest, int initIndex,
-                         int& index1, int& size1, int& index2, int& size2)
-    {
-        // numOfSamples can be positive or negative,
-        //if positive future samples are wanted,
-        //if negative past samples are wanted
-        if (numOfSamples > 0)
-        {
-            if ( initIndex + numOfSamples < sizeOfDest)
-            {
-                index1 = initIndex; size1 = numOfSamples;
-                index2 = 0;         size2 = 0;
-            }
-            else
-            {
-                index1 = initIndex; size1 = (initIndex + numOfSamples) - sizeOfDest;
-                index2 = 0;         size2 = numOfSamples - size1;
-            }
-        }
-        if (numOfSamples < 0)
-        {
-            if ( initIndex + numOfSamples >= 0)
-            {
-                index1 = initIndex + numOfSamples; size1 = -numOfSamples;
-                index2 = 0;                        size2 = 0;
-            }
-            else
-            {
-                index1 = sizeOfDest + ( initIndex + numOfSamples ) - 1; size1 = sizeOfDest - index1 - 1;
-                index2 = 0;                                             size2 = -numOfSamples - size1;
-            }
-            
-        }
-        if (numOfSamples == 0)
-        {
-            index1 = initIndex; size1 = 0;
-            index2 = 0;         size2 = 0;
-        }
-    }
-};
 
 //==============================================================================
 ChannelStripAnalyserAudioProcessor::ChannelStripAnalyserAudioProcessor()
@@ -109,6 +66,99 @@ ChannelStripAnalyserAudioProcessor::~ChannelStripAnalyserAudioProcessor()
 }
 
 //==============================================================================
+void ChannelStripAnalyserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+{
+    // graph pre prepareToPlay settings
+    graph.setPlayConfigDetails   (getTotalNumInputChannels(), getTotalNumOutputChannels(), sampleRate, samplesPerBlock);
+    graph.setProcessingPrecision (AudioProcessor::singlePrecision);
+    asampleRate.store (sampleRate);
+    ablockSize.store  (samplesPerBlock);
+    AudioPluginChannelConfiguration();
+    
+    const GenericScopedTryLock <CriticalSection> myTryLock (graph.getCallbackLock());
+    if ( myTryLock.isLocked())
+    {
+        graph.prepareToPlay(sampleRate, samplesPerBlock);
+    }
+    
+    const int numOfChannelsInInputStream = getTotalNumInputChannels();
+    const int sizeOfAudioBuffer   =  getSampleRate(); //size of audioBuffer is ~1s (fftSize multiple)
+    const int sizeOfHistoryBuffer =  5 * getSampleRate(); //size of historyBuffer is ~5s (fftSize multiple)
+
+    mainAudioBufferSystem.reset (numOfChannelsInInputStream, sizeOfAudioBuffer, sizeOfHistoryBuffer);
+}
+
+void ChannelStripAnalyserAudioProcessor::releaseResources()
+{
+    // When playback stops, you can use this as an opportunity to free up any
+    // spare memory, etc.
+}
+
+#ifndef JucePlugin_PreferredChannelConfigurations
+bool ChannelStripAnalyserAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
+{
+#if JucePlugin_IsMidiEffect
+    ignoreUnused (layouts);
+    return true;
+#else
+    // This is the place where you check if the layout is supported.
+    // In this template code we only support mono or stereo.
+    if (layouts.getMainOutputChannelSet() != AudioChannelSet::mono()
+        && layouts.getMainOutputChannelSet() != AudioChannelSet::stereo())
+        return false;
+    
+    // This checks if the input layout matches the output layout
+#if ! JucePlugin_IsSynth
+    if (layouts.getMainOutputChannelSet() != layouts.getMainInputChannelSet())
+        return false;
+#endif
+    
+    return true;
+#endif
+}
+#endif
+
+void ChannelStripAnalyserAudioProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer& midiMessages)
+{
+    ScopedNoDenormals noDenormals;
+    
+    auto totalNumInputChannels  = getTotalNumInputChannels();
+    auto totalNumOutputChannels = getTotalNumOutputChannels();
+    
+    for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
+        buffer.clear (i, 0, buffer.getNumSamples());
+    
+    const int numOfSamplesInIncomingBlock = buffer.getNumSamples();
+    
+    mainAudioBufferSystem.bufferPre.writeBufferIntoAudioBuffer (buffer, numOfSamplesInIncomingBlock);
+    
+    if (graphLatencySamples != graph.getLatencySamples() )
+    {
+        graphLatencySamples = graph.getLatencySamples();
+        mainAudioBufferSystem.bufferPre.processorDelay.store (graphLatencySamples);
+    }
+    
+    // graph audio stream processing
+    const GenericScopedTryLock <CriticalSection> myTryLock (graph.getCallbackLock());
+    if ( myTryLock.isLocked())
+    {
+        graph.processBlock (buffer, midiMessages);
+    }
+    mainAudioBufferSystem.bufferPost.writeBufferIntoAudioBuffer (buffer, numOfSamplesInIncomingBlock);
+}
+
+//==============================================================================
+AudioProcessorEditor* ChannelStripAnalyserAudioProcessor::createEditor()
+{
+    return new ChannelStripAnalyserAudioProcessorEditor (*this, parameters, mainAudioBufferSystem );
+}
+
+bool ChannelStripAnalyserAudioProcessor::hasEditor() const
+{
+    return true; // (change this to false if you choose to not supply an editor)
+}
+
+//==============================================================================
 const String ChannelStripAnalyserAudioProcessor::getName() const
 {
     return JucePlugin_Name;
@@ -146,6 +196,7 @@ double ChannelStripAnalyserAudioProcessor::getTailLengthSeconds() const
     return 0.0;
 }
 
+//==============================================================================
 int ChannelStripAnalyserAudioProcessor::getNumPrograms()
 {
     return 1;   // NB: some hosts don't cope very well if you tell them there are 0 programs,
@@ -170,158 +221,6 @@ void ChannelStripAnalyserAudioProcessor::changeProgramName (int index, const Str
 {
 }
 
-void ChannelStripAnalyserAudioProcessor::releaseResources()
-{
-    // When playback stops, you can use this as an opportunity to free up any
-    // spare memory, etc.
-}
-
-#ifndef JucePlugin_PreferredChannelConfigurations
-bool ChannelStripAnalyserAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
-{
-#if JucePlugin_IsMidiEffect
-    ignoreUnused (layouts);
-    return true;
-#else
-    // This is the place where you check if the layout is supported.
-    // In this template code we only support mono or stereo.
-    if (layouts.getMainOutputChannelSet() != AudioChannelSet::mono()
-        && layouts.getMainOutputChannelSet() != AudioChannelSet::stereo())
-        return false;
-    
-    // This checks if the input layout matches the output layout
-#if ! JucePlugin_IsSynth
-    if (layouts.getMainOutputChannelSet() != layouts.getMainInputChannelSet())
-        return false;
-#endif
-    
-    return true;
-#endif
-}
-#endif
-
-//==============================================================================
-void ChannelStripAnalyserAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
-{
-    // graph pre prepareToPlay settings
-    graph.setPlayConfigDetails   (getTotalNumInputChannels(), getTotalNumOutputChannels(), sampleRate, samplesPerBlock);
-    graph.setProcessingPrecision (AudioProcessor::singlePrecision);
-    asampleRate.store (sampleRate);
-    ablockSize.store  (samplesPerBlock);
-    AudioPluginChannelConfiguration();
-
-    const GenericScopedTryLock <CriticalSection> myTryLock (graph.getCallbackLock());
-    if ( myTryLock.isLocked())
-    {
-        graph.prepareToPlay(sampleRate, samplesPerBlock);
-    }
-    
-
-    const int numOfChannelsInInputStream = getTotalNumInputChannels();
-    const int sizeOfAudioBuffer   =  roundToInt(getSampleRate() / fftSize) * fftSize; //size of audioBuffer is ~1s (fftSize multiple)
-    const int sizeOfHistoryBuffer =  roundToInt( (5 * getSampleRate()) / fftSize) * fftSize; //size of historyBuffer is ~5s (fftSize multiple)
-    mainAudioBufferSystem.reset (numOfChannelsInInputStream, sizeOfAudioBuffer, sizeOfHistoryBuffer);
-}
-
-void ChannelStripAnalyserAudioProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer& midiMessages)
-{
-    ScopedNoDenormals noDenormals;
-    
-    auto totalNumInputChannels  = getTotalNumInputChannels();
-    auto totalNumOutputChannels = getTotalNumOutputChannels();
-    
-    for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
-        buffer.clear (i, 0, buffer.getNumSamples());
-    
-    getPlayHead() -> getCurrentPosition (currentPosition);
-    
-    const int numOfSamplesInIncomingBlock = buffer.getNumSamples();
-
-    mainAudioBufferSystem.bufferPre.writeBufferIntoAudioBuffer (buffer, numOfSamplesInIncomingBlock);
-    
-    if (graphLatencySamples != graph.getLatencySamples() )
-    {
-        graphLatencySamples = graph.getLatencySamples();
-        mainAudioBufferSystem.bufferPre.processorDelay.store (graphLatencySamples);
-    }
-
-    // graph audio stream processing
-    const GenericScopedTryLock <CriticalSection> myTryLock (graph.getCallbackLock());
-    if ( myTryLock.isLocked())
-    {
-        graph.processBlock (buffer, midiMessages);
-    }
-    mainAudioBufferSystem.bufferPost.writeBufferIntoAudioBuffer (buffer, numOfSamplesInIncomingBlock);
-}
-
-AudioBuffer<float>& ChannelStripAnalyserAudioProcessor::getAudioBuffers (int bufferPreOrPost)
-{
-    switch (bufferPreOrPost)
-    {
-        case 0: return mainAudioBufferSystem.bufferPre.historyBuffer; break;
-        case 1: return mainAudioBufferSystem.bufferPost.historyBuffer; break;
-    }
-}
-
-void ChannelStripAnalyserAudioProcessor::createWindowTable()
-{
-    for (auto i = 0; i < fftSize; i++)
-    {
-        for (int ch = 0; ch < getTotalNumInputChannels(); ++ch)
-        {
-            float value = 1 * (0.5f * (1 - std::cos ( (2 * juce::float_Pi * i) / (fftSize - 1) ) ) );
-            windowTable.setSample(ch, i, value);
-        }
-    }
-}
-
-void ChannelStripAnalyserAudioProcessor::createParameters()
-{
-    parameters.createAndAddParameter(SLIDER_RANGE_VECTORSCOPE_ID, SLIDER_RANGE_VECTORSCOPE_NAME, SLIDER_RANGE_VECTORSCOPE_NAME, NormalisableRange<float> (50,400,1), 200, nullptr, nullptr);
-    parameters.createAndAddParameter(SLIDER_VANISH_TIME_ID, SLIDER_VANISH_TIME_NAME, SLIDER_VANISH_TIME_NAME, NormalisableRange<float> (1,49,1), 20, nullptr, nullptr);
-    
-    parameters.createAndAddParameter(SLIDER_CURBE_OFFSET_ID, SLIDER_CURBE_OFFSET_NAME, SLIDER_CURBE_OFFSET_NAME, NormalisableRange<float> (0.0f,1.0f), 0.5f, nullptr, nullptr);
-    parameters.createAndAddParameter(SLIDER_DIFFERENCE_GAIN_ID, SLIDER_DIFFERENCE_GAIN_NAME, SLIDER_DIFFERENCE_GAIN_NAME, NormalisableRange<float> (0.0f,1.0f), 0.5f, nullptr, nullptr);
-    parameters.createAndAddParameter(SLIDER_RMS_WINDOW_ID, SLIDER_RMS_WINDOW_NAME, SLIDER_RMS_WINDOW_NAME, NormalisableRange<float> (0.0f,1.0f), 0.5f, nullptr, nullptr);
-    parameters.createAndAddParameter(SLIDER_ZOOM_X_ID, SLIDER_ZOOM_X_NAME, SLIDER_ZOOM_X_NAME, NormalisableRange<float> (0.0f,1.0f), 0.5f, nullptr, nullptr);
-    parameters.createAndAddParameter(SLIDER_ZOOM_Y_ID, SLIDER_ZOOM_Y_NAME, SLIDER_ZOOM_Y_NAME, NormalisableRange<float> (0.0f,1.0f), 0.5f, nullptr, nullptr);
-    
-    parameters.createAndAddParameter(SLIDER_RANGE_SPECTRUM_ANALYSER_ID, SLIDER_RANGE_SPECTRUM_ANALYSER_NAME, SLIDER_RANGE_SPECTRUM_ANALYSER_NAME, NormalisableRange<float> (1.0f,4.0f,1.0f), 4.f, nullptr, nullptr);
-    parameters.createAndAddParameter(SLIDER_RETURN_TIME_ID, SLIDER_RETURN_TIME_NAME, SLIDER_RETURN_TIME_NAME, NormalisableRange<float> (1.f, 4.f, 1.f), 4.f, nullptr, nullptr);
-    
-    
-    parameters.createAndAddParameter(SLIDER_TIME_AVERAGE_ID, SLIDER_TIME_AVERAGE_NAME, SLIDER_TIME_AVERAGE_NAME, NormalisableRange<float> (1.f ,4.f ,1.f), 3.f, nullptr, nullptr);
-    parameters.createAndAddParameter(SLIDER_RANGE_SPECTRUM_DIFFERENCE_ID, SLIDER_RANGE_SPECTRUM_DIFFERENCE_NAME, SLIDER_RANGE_SPECTRUM_DIFFERENCE_NAME, NormalisableRange<float> (1.0f,4.0f,1.0f), 1.f, nullptr, nullptr);
-    
-    parameters.createAndAddParameter(SLIDER_LEVEL_METER_1_ID, SLIDER_LEVEL_METER_1_NAME, SLIDER_LEVEL_METER_1_NAME, NormalisableRange<float> (0.0f,1.0f), 0.5f, nullptr, nullptr);
-    parameters.createAndAddParameter(SLIDER_LEVEL_METER_2_ID, SLIDER_LEVEL_METER_2_NAME, SLIDER_LEVEL_METER_2_NAME, NormalisableRange<float> (0.0f,1.0f), 0.5f, nullptr, nullptr);
-    
-    parameters.createAndAddParameter(BUTTON_PLUGINBYPASS_1_ID, BUTTON_PLUGINBYPASS_1_NAME, BUTTON_PLUGINBYPASS_1_NAME, NormalisableRange<float> (0.0f,1.0f), false, nullptr, nullptr, false, true, true);
-    parameters.createAndAddParameter(BUTTON_PLUGINBYPASS_2_ID, BUTTON_PLUGINBYPASS_2_NAME, BUTTON_PLUGINBYPASS_2_NAME, NormalisableRange<float> (0.0f,1.0f), false, nullptr, nullptr, false, true, true);
-    parameters.createAndAddParameter(BUTTON_PLUGINBYPASS_3_ID, BUTTON_PLUGINBYPASS_3_NAME, BUTTON_PLUGINBYPASS_3_NAME, NormalisableRange<float> (0.0f,1.0f), false, nullptr, nullptr, false, true, true);
-    parameters.createAndAddParameter(BUTTON_PLUGINBYPASS_4_ID, BUTTON_PLUGINBYPASS_4_NAME, BUTTON_PLUGINBYPASS_4_NAME, NormalisableRange<float> (0.0f,1.0f), false, nullptr, nullptr, false, true, true);
-    parameters.createAndAddParameter(BUTTON_PLUGINBYPASS_5_ID, BUTTON_PLUGINBYPASS_5_NAME, BUTTON_PLUGINBYPASS_5_NAME, NormalisableRange<float> (0.0f,1.0f), false, nullptr, nullptr, false, true, true);
-    parameters.createAndAddParameter(BUTTON_PLUGINBYPASS_6_ID, BUTTON_PLUGINBYPASS_6_NAME, BUTTON_PLUGINBYPASS_6_NAME, NormalisableRange<float> (0.0f,1.0f), false, nullptr, nullptr, false, true, true);
-    
-    parameters.createAndAddParameter("BUTTON_MONOMODE_ID", "BUTTON_MONOMODE_NAME", "BUTTON_MONOMODE_NAME", NormalisableRange<float> (0.0f,1.0f), true, nullptr, nullptr, false, true, true);
-    parameters.createAndAddParameter("BUTTON_LRMODE_ID", "BUTTON_LRMODE_NAME", "BUTTON_LRMODE_NAME", NormalisableRange<float> (0.0f,1.0f), false, nullptr, nullptr, false, true, true);
-    parameters.createAndAddParameter("BUTTON_MSMODE_ID", "BUTTON_MSMODE_NAME", "BUTTON_MSMODE_NAME", NormalisableRange<float> (0.0f,1.0f), false, nullptr, nullptr, false, true, true);
-    
-    parameters.state = ValueTree("plugin_parameters");
-
-}
-
-//==============================================================================
-bool ChannelStripAnalyserAudioProcessor::hasEditor() const
-{
-    return true; // (change this to false if you choose to not supply an editor)
-}
-
-AudioProcessorEditor* ChannelStripAnalyserAudioProcessor::createEditor()
-{
-    return new ChannelStripAnalyserAudioProcessorEditor (*this, parameters, mainAudioBufferSystem );
-}
-
 //==============================================================================
 void ChannelStripAnalyserAudioProcessor::getStateInformation (MemoryBlock& destData)
 {
@@ -341,11 +240,11 @@ void ChannelStripAnalyserAudioProcessor::getStateInformation (MemoryBlock& destD
     // Creating internal state XML representation and adding it to the main XML element
     ScopedPointer<XmlElement> internalParameters (parameters.copyState().createXml());
     rootXml->addChildElement(internalParameters);
-
+    
     // for each loaded plugin; exporting the plugin description and the actual state of the processor and saving them in different XML elements
     ScopedPointer <XmlElement> loadedPluginsDescriptions (new XmlElement("LoadedPluginsDescriptions"));
     ScopedPointer <XmlElement> loadedPluginsProcessorState (new XmlElement("LoadedPluginsProcessorState"));
-
+    
     for (auto i=0; i<6; i++)
     {
         if (plugIns[i])
@@ -357,8 +256,8 @@ void ChannelStripAnalyserAudioProcessor::getStateInformation (MemoryBlock& destD
             
             MemoryBlock m;
             graph.getNodeForId(juce::uint32(i+3))->getProcessor()->getStateInformation (m);
-            loadedPluginsProcessorState ->addChildElement(new XmlElement((String)(i)));
-            loadedPluginsProcessorState ->getChildByName((String)(i)) ->addTextElement(m.toBase64Encoding());
+            loadedPluginsProcessorState ->addChildElement(new XmlElement("Plugin" + (String)(i)));
+            loadedPluginsProcessorState ->getChildByName("Plugin" + (String)(i)) ->addTextElement(m.toBase64Encoding());
         }
     }
     
@@ -395,17 +294,16 @@ void ChannelStripAnalyserAudioProcessor::setStateInformation (const void* data, 
     }
     
     // exporting internal parameters from main XML element
-    XmlElement* internalParameters  (rootXml->getChildByName("plugin_parameters"));
+    ScopedPointer<XmlElement> internalParameters  (new XmlElement (*rootXml->getChildByName("plugin_parameters")));
     
     // exporting plugin descriptions from the main XML element
-    XmlElement* pluginsDescriptions (rootXml->getChildByName("LoadedPluginsDescriptions"));
-    XmlElement* pluginsStates (rootXml->getChildByName("LoadedPluginsProcessorState"));
-
+    ScopedPointer<XmlElement> pluginsDescriptions (new XmlElement (*rootXml->getChildByName("LoadedPluginsDescriptions")));
+    ScopedPointer<XmlElement> pluginsStates (new XmlElement (*rootXml->getChildByName("LoadedPluginsProcessorState")));
+    
     for (auto i=0; i<6; i++)
     {
         if (plugIns[i])
         {
-            if (true)
             {
                 PluginDescription pd;
                 ScopedPointer <XmlElement> pdXml (pluginsDescriptions->getFirstChildElement());
@@ -413,13 +311,12 @@ void ChannelStripAnalyserAudioProcessor::setStateInformation (const void* data, 
                 createPluginProcessor(&pd, i+1);
                 pluginsDescriptions->removeChildElement(pdXml, false);
             }
-            if (true)
             {
                 MemoryBlock m;
                 ScopedPointer<XmlElement> psXml (pluginsStates->getFirstChildElement());
                 m.fromBase64Encoding (psXml->getAllSubText());
-                graph.getNodeForId (juce::uint32(i+3))->getProcessor()->setStateInformation (m.getData(), (int) m.getSize());
-                pluginsStates->removeChildElement(psXml, false);
+                graph.getNodeForId (juce::uint32(i+3)) -> getProcessor() -> setStateInformation (m.getData(), (int) m.getSize());
+                pluginsStates -> removeChildElement (psXml, false);
             }
         }
     }
@@ -430,7 +327,6 @@ void ChannelStripAnalyserAudioProcessor::setStateInformation (const void* data, 
         if (internalParameters-> hasTagName(parameters.state.getType()))
         {
             parameters.replaceState(ValueTree::fromXml(*internalParameters));
-            //= ValueTree::fromXml(*internalParameters);
         }
     }
     
@@ -441,20 +337,7 @@ void ChannelStripAnalyserAudioProcessor::setStateInformation (const void* data, 
     
 }
 
-void ChannelStripAnalyserAudioProcessor::createPluginProcessor(const PluginDescription* desc, int i)
-{
-    plugIns[i-1] = true;
-    String errorMessage;
-    graph.addNode (formatManager.createPluginInstance (*desc, getSampleRate(), getBlockSize(), errorMessage),juce::uint32(i+2));
-    AudioPluginChannelConfiguration();
-}
-
-void ChannelStripAnalyserAudioProcessor::deletePluginProcessor(int i)
-{
-    graph.removeNode(juce::uint32(i+2));
-    AudioPluginChannelConfiguration();
-}
-
+//==============================================================================
 void ChannelStripAnalyserAudioProcessor::AudioPluginChannelConfiguration()
 {
     // creates the layout of the graph, connecting the active nodes beetwen them and the input/output nodes
@@ -569,6 +452,69 @@ void ChannelStripAnalyserAudioProcessor::AudioPluginChannelConfiguration()
         graph.addConnection(connectionR);
     }
 }
+
+void ChannelStripAnalyserAudioProcessor::createPluginProcessor(const PluginDescription* desc, int i)
+{
+    plugIns[i-1] = true;
+    String errorMessage;
+    graph.addNode (formatManager.createPluginInstance (*desc, getSampleRate(), getBlockSize(), errorMessage),juce::uint32(i+2));
+    AudioPluginChannelConfiguration();
+}
+
+void ChannelStripAnalyserAudioProcessor::deletePluginProcessor(int i)
+{
+    graph.removeNode(juce::uint32(i+2));
+    AudioPluginChannelConfiguration();
+}
+
+void ChannelStripAnalyserAudioProcessor::createParameters()
+{
+    
+    // WAVEFORM
+    parameters.createAndAddParameter(SLIDER_WAVEFORM_RANGE_ID, SLIDER_WAVEFORM_RANGE_NAME, SLIDER_WAVEFORM_RANGE_NAME,
+                                     NormalisableRange<float> (1.0f,3.0f, 1.0f), 1.0f, nullptr, nullptr);
+    parameters.createAndAddParameter(SLIDER_WAVEFORM_TIMEMODE_ID, SLIDER_WAVEFORM_TIMEMODE_NAME, SLIDER_WAVEFORM_TIMEMODE_NAME,
+                                     NormalisableRange<float> (0.0f,2.0f), 1.0f, nullptr, nullptr);
+    
+    // VECTORSCOPE
+    parameters.createAndAddParameter(SLIDER_RANGE_VECTORSCOPE_ID, SLIDER_RANGE_VECTORSCOPE_NAME, SLIDER_RANGE_VECTORSCOPE_NAME,
+                                     NormalisableRange<float> (50,400,1), 200, nullptr, nullptr);
+    parameters.createAndAddParameter(SLIDER_VANISH_TIME_ID, SLIDER_VANISH_TIME_NAME, SLIDER_VANISH_TIME_NAME,
+                                     NormalisableRange<float> (5,50,1), 20, nullptr, nullptr);
+    
+    // SPECTRUM ANALYSER
+    parameters.createAndAddParameter(SLIDER_RANGE_SPECTRUM_ANALYSER_ID, SLIDER_RANGE_SPECTRUM_ANALYSER_NAME, SLIDER_RANGE_SPECTRUM_ANALYSER_NAME,
+                                     NormalisableRange<float> (1.0f,4.0f,1.0f), 4.f, nullptr, nullptr);
+    parameters.createAndAddParameter(SLIDER_RETURN_TIME_ID, SLIDER_RETURN_TIME_NAME, SLIDER_RETURN_TIME_NAME,
+                                     NormalisableRange<float> (1.f, 4.f, 1.f), 4.f, nullptr, nullptr);
+    
+    // SPECTRUM DIFFERENCE
+    parameters.createAndAddParameter(SLIDER_RANGE_SPECTRUM_DIFFERENCE_ID, SLIDER_RANGE_SPECTRUM_DIFFERENCE_NAME, SLIDER_RANGE_SPECTRUM_DIFFERENCE_NAME,
+                                     NormalisableRange<float> (1.0f,4.0f,1.0f), 1.f, nullptr, nullptr);
+    parameters.createAndAddParameter(SLIDER_TIME_AVERAGE_ID, SLIDER_TIME_AVERAGE_NAME, SLIDER_TIME_AVERAGE_NAME,
+                                     NormalisableRange<float> (1.f ,4.f ,1.f), 3.f, nullptr, nullptr);
+    
+    // PLUGIN SLOTS
+    parameters.createAndAddParameter(BUTTON_PLUGINBYPASS_1_ID, BUTTON_PLUGINBYPASS_1_NAME, BUTTON_PLUGINBYPASS_1_NAME, NormalisableRange<float> (0.0f,1.0f), false, nullptr, nullptr, false, true, true);
+    parameters.createAndAddParameter(BUTTON_PLUGINBYPASS_2_ID, BUTTON_PLUGINBYPASS_2_NAME, BUTTON_PLUGINBYPASS_2_NAME, NormalisableRange<float> (0.0f,1.0f), false, nullptr, nullptr, false, true, true);
+    parameters.createAndAddParameter(BUTTON_PLUGINBYPASS_3_ID, BUTTON_PLUGINBYPASS_3_NAME, BUTTON_PLUGINBYPASS_3_NAME, NormalisableRange<float> (0.0f,1.0f), false, nullptr, nullptr, false, true, true);
+    parameters.createAndAddParameter(BUTTON_PLUGINBYPASS_4_ID, BUTTON_PLUGINBYPASS_4_NAME, BUTTON_PLUGINBYPASS_4_NAME, NormalisableRange<float> (0.0f,1.0f), false, nullptr, nullptr, false, true, true);
+    parameters.createAndAddParameter(BUTTON_PLUGINBYPASS_5_ID, BUTTON_PLUGINBYPASS_5_NAME, BUTTON_PLUGINBYPASS_5_NAME, NormalisableRange<float> (0.0f,1.0f), false, nullptr, nullptr, false, true, true);
+    parameters.createAndAddParameter(BUTTON_PLUGINBYPASS_6_ID, BUTTON_PLUGINBYPASS_6_NAME, BUTTON_PLUGINBYPASS_6_NAME, NormalisableRange<float> (0.0f,1.0f), false, nullptr, nullptr, false, true, true);
+    
+    // M S M/S
+    parameters.createAndAddParameter("BUTTON_MONOMODE_ID", "BUTTON_MONOMODE_NAME", "BUTTON_MONOMODE_NAME", NormalisableRange<float> (0.0f,1.0f), true, nullptr, nullptr, false, true, true);
+    parameters.createAndAddParameter("BUTTON_LRMODE_ID", "BUTTON_LRMODE_NAME", "BUTTON_LRMODE_NAME", NormalisableRange<float> (0.0f,1.0f), false, nullptr, nullptr, false, true, true);
+    parameters.createAndAddParameter("BUTTON_MSMODE_ID", "BUTTON_MSMODE_NAME", "BUTTON_MSMODE_NAME", NormalisableRange<float> (0.0f,1.0f), false, nullptr, nullptr, false, true, true);
+    
+    parameters.state = ValueTree("plugin_parameters");
+    
+}
+
+void ChannelStripAnalyserAudioProcessor::triggerGraphPrepareToPlay()
+{
+    graph.prepareToPlay(getSampleRate(), getBlockSize());
+}
 //==============================================================================
 // This creates new instances of the plugin..
 AudioProcessor* JUCE_CALLTYPE createPluginFilter()
@@ -581,21 +527,14 @@ AudioBufferManagement::AudioBufferManagement (int channels, int sizeAudioBuffer,
 :
 bufferPre  (channels, sizeAudioBuffer, sizeHistoryBuffer, "bufferPre", threadMutex),
 bufferPost (channels, sizeAudioBuffer, sizeHistoryBuffer, "bufferPost", threadMutex)
-
 {
     visualizersSemaphore.store(0);
 }
+
 void AudioBufferManagement::pushAudioBufferIntoHistoryBuffer()
 {
-//    if ( visualizersSemaphore.load() != 0 )
-//        return;
-    
     if (bufferPre.abstractFifoAudio.getNumReady() != bufferPost.abstractFifoAudio.getNumReady())
         return;
-    
-//    std::unique_lock<std::mutex> lock (threadMutex, std::try_to_lock);
-//    if(!lock.owns_lock())
-//        return;
     
     for (int bufferPrePost = 0; bufferPrePost < 2; bufferPrePost++)
     {
@@ -667,12 +606,13 @@ void AudioBufferManagement::pushAudioBufferIntoHistoryBuffer()
 
     }
 }
+
 void AudioBufferManagement::reset(int newChannel, int newSizeAudioBuffer, int newSizeHistoryBuffer)
 {
     bufferPre.reset(newChannel, newSizeAudioBuffer, newSizeHistoryBuffer);
     bufferPost.reset(newChannel, newSizeAudioBuffer, newSizeHistoryBuffer);
 }
-// =============================================================================
+
 void AudioBufferManagement::audioBufferManagementType::reset(int ch, int sAb, int sHb)
 {
     historyBuffer.clear();
@@ -688,6 +628,7 @@ void AudioBufferManagement::audioBufferManagementType::reset(int ch, int sAb, in
     lastSampleIndexAudioBuffer.store(0);
     lastSampleIndexHistoryBuffer.store(0);
 }
+
 void AudioBufferManagement::audioBufferManagementType::writeBufferIntoAudioBuffer(AudioBuffer<float> &fromBuffer, int numOfSamples)
 {
     int index1, size1, index2, size2;
@@ -720,10 +661,9 @@ void AudioBufferManagement::audioBufferManagementType::writeBufferIntoAudioBuffe
     abstractFifoAudio.finishedWrite ( size1 + size2 );
     
 }
+
 void AudioBufferManagement::audioBufferManagementType::copySamplesFromHistoryBuffer(AudioBuffer<float> &toBuffer, int numOfSamples)
 {
-//    std::lock_guard<std::mutex> lock (threadMutex);
-
     const int procDelay = processorDelay.load();
     const int numOfSamplesInBuffer = historyBuffer.getNumSamples();
     const int lastSampleIndex = lastSampleIndexHistoryBuffer.load() - procDelay;
@@ -745,12 +685,64 @@ void AudioBufferManagement::audioBufferManagementType::copySamplesFromHistoryBuf
         for (auto channel = 0; channel < historyBuffer.getNumChannels(); channel++)
             toBuffer.copyFrom(channel, 0, historyBuffer, channel, firstSampleIndex, numOfSamples);
     }
-
 }
+
+float AudioBufferManagement::audioBufferManagementType::getRMSMonoValueInSample(int samplesInThePast, int windowSize)
+{
+    const int procDelay = processorDelay.load();
+    const int numOfSamplesInBuffer = historyBuffer.getNumSamples();
+    const int lastSampleIndex = lastSampleIndexHistoryBuffer.load() - procDelay - samplesInThePast;
+    
+    AudioBuffer<float> monoBuffer ( 1, windowSize );
+    int firstSampleIndex = lastSampleIndex - windowSize;
+    if (firstSampleIndex < 0) firstSampleIndex = numOfSamplesInBuffer + firstSampleIndex;
+    if ( firstSampleIndex + windowSize > numOfSamplesInBuffer)
+    {
+        int size1 = numOfSamplesInBuffer - firstSampleIndex;
+        int size2 = windowSize - size1;
+        
+        FloatVectorOperations::add
+            (monoBuffer.getWritePointer(0, 0), historyBuffer.getReadPointer(0, firstSampleIndex), historyBuffer.getReadPointer(1, firstSampleIndex), size1);
+        FloatVectorOperations::add
+            (monoBuffer.getWritePointer(0, size1), historyBuffer.getReadPointer(0, 0), historyBuffer.getReadPointer(1, 0), size2);
+    }
+    else
+    {
+        FloatVectorOperations::add
+            (monoBuffer.getWritePointer(0, 0), historyBuffer.getReadPointer(0, firstSampleIndex), historyBuffer.getReadPointer(1, firstSampleIndex), windowSize);
+    }
+    return monoBuffer.getRMSLevel(0, 0, windowSize);
+}
+
+float AudioBufferManagement::audioBufferManagementType::getRMSChannelValueInSample(int samplesInThePast, int windowSize, int channel)
+{
+    const int procDelay = processorDelay.load();
+    const int numOfSamplesInBuffer = historyBuffer.getNumSamples();
+    const int lastSampleIndex = lastSampleIndexHistoryBuffer.load() - procDelay - samplesInThePast;
+    
+    AudioBuffer<float> monoBuffer ( 1, windowSize );
+    int firstSampleIndex = lastSampleIndex - windowSize;
+    if (firstSampleIndex < 0) firstSampleIndex = numOfSamplesInBuffer + firstSampleIndex;
+    if ( firstSampleIndex + windowSize > numOfSamplesInBuffer)
+    {
+        int size1 = numOfSamplesInBuffer - firstSampleIndex;
+        int size2 = windowSize - size1;
+        FloatVectorOperations::copy(monoBuffer.getWritePointer(0, 0), historyBuffer.getReadPointer(channel, firstSampleIndex), size1);
+        FloatVectorOperations::copy(monoBuffer.getWritePointer(0, size1), historyBuffer.getReadPointer(channel, 0), size2);
+    }
+    else
+    {
+        FloatVectorOperations::copy(monoBuffer.getWritePointer(0, 0), historyBuffer.getReadPointer(channel, firstSampleIndex), windowSize);
+    }
+    return monoBuffer.getRMSLevel(0, 0, windowSize);
+}
+
 int AudioBufferManagement::audioBufferManagementType::getLastIndexPositionInHistoryBuffer()
 {
     return lastSampleIndexHistoryBuffer.load();
 }
+
+
 //==============================================================================
 void forwardFFT::createWindowTable()
 {
@@ -763,20 +755,25 @@ void forwardFFT::createWindowTable()
         }
     }
 }
+
 void forwardFFT::performFFT( AudioBuffer<float>& audioBuffer )
 {
+    std::lock_guard<std::mutex> lock (m);
     const int numOfChannels = audioBuffer.getNumChannels();
     for (auto channel = 0; channel < numOfChannels; channel++)
     {
         FloatVectorOperations::multiply (audioBuffer.getWritePointer(channel), windowTable.getReadPointer(channel), fftSize);
-        forwFFT.performRealOnlyForwardTransform (audioBuffer.getWritePointer(channel));
+        forwFFT->performRealOnlyForwardTransform (audioBuffer.getWritePointer(channel));
     }
 }
 
-
-
-
-
+void forwardFFT::changeFFTSize(int newSize)
+{
+    std::lock_guard<std::mutex> lock (m);
+    fftSize = newSize;
+    createWindowTable();
+    forwFFT.reset (new dsp::FFT (roundToInt (std::log2 (fftSize))));
+}
 
 
 
